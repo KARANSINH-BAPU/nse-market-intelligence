@@ -18,7 +18,8 @@ from app.core.config import settings
 from app.core.logging import setup_logging
 from app.db.session import engine
 from app.db.redis import redis_client
-from app.api.v1 import health, system
+from app.api.v1.health import router as health_router
+from app.api.v1.system import router as system_router
 from app.websockets.manager import ws_manager
 
 # ── Logging must be configured before first use ─────────────
@@ -39,8 +40,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Verify database connectivity
     try:
+        from sqlalchemy import text
         async with engine.begin() as conn:
-            await conn.execute("SELECT 1")  # type: ignore[arg-type]
+            await conn.execute(text("SELECT 1"))
         log.info("database_connected")
     except Exception as exc:
         log.warning("database_unavailable", error=str(exc))
@@ -102,8 +104,8 @@ def create_app() -> FastAPI:
         return response
 
     # ── Include Routers ─────────────────────────────────────
-    app.include_router(health.router, prefix="", tags=["Health"])
-    app.include_router(system.router, prefix="/api/v1/system", tags=["System"])
+    app.include_router(health_router, prefix="", tags=["Health"])
+    app.include_router(system_router, prefix="/api/v1/system", tags=["System"])
 
     # ── WebSocket Endpoint ──────────────────────────────────
     from fastapi import WebSocket, WebSocketDisconnect

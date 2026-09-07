@@ -20,7 +20,7 @@ from rich.table import Table
 from rich import box
 
 ROOT = Path(__file__).parent.parent
-console = Console()
+console = Console(force_terminal=True, highlight=False)
 
 
 # ── Check helpers ────────────────────────────────────────────
@@ -41,7 +41,10 @@ def _check_python() -> tuple[bool, str]:
 
 
 def _check_node() -> tuple[bool, str]:
-    result = subprocess.run(["node", "--version"], capture_output=True, text=True, timeout=10)
+    node = shutil.which("node")
+    if not node:
+        return False, "Node.js not found in PATH"
+    result = subprocess.run([node, "--version"], capture_output=True, text=True, timeout=10)
     if result.returncode == 0:
         ver = result.stdout.strip()
         return True, f"Node.js {ver}"
@@ -49,14 +52,20 @@ def _check_node() -> tuple[bool, str]:
 
 
 def _check_npm() -> tuple[bool, str]:
-    result = subprocess.run(["npm", "--version"], capture_output=True, text=True, timeout=10)
+    npm = shutil.which("npm")
+    if not npm:
+        return False, "npm not found in PATH"
+    result = subprocess.run([npm, "--version"], capture_output=True, text=True, timeout=10)
     if result.returncode == 0:
         return True, f"npm {result.stdout.strip()}"
     return False, "npm not found or execution policy blocking"
 
 
 def _check_git() -> tuple[bool, str]:
-    result = subprocess.run(["git", "--version"], capture_output=True, text=True, timeout=10)
+    git = shutil.which("git")
+    if not git:
+        return False, "Git not found in PATH"
+    result = subprocess.run([git, "--version"], capture_output=True, text=True, timeout=10)
     if result.returncode == 0:
         return True, result.stdout.strip()
     return False, "Git not found"
@@ -210,7 +219,7 @@ def run_doctor() -> None:
 
     total = passed + failed + warnings
     if failed == 0:
-        console.print(f"[bold green]✓ {passed}/{total} checks passed[/bold green]", end="")
+        console.print(f"[bold green]PASS {passed}/{total} checks passed[/bold green]", end="")
         if warnings > 0:
             console.print(f" [yellow]({warnings} services not running)[/yellow]")
         else:
@@ -218,7 +227,7 @@ def run_doctor() -> None:
         console.print("[dim]KP environment looks healthy.[/dim]")
     else:
         console.print(
-            f"[bold red]✗ {failed} check(s) failed[/bold red] "
+            f"[bold red]FAIL {failed} check(s) failed[/bold red] "
             f"[dim]({passed} passed, {warnings} warnings)[/dim]"
         )
         console.print("[dim]Fix the failed items above, then run [cyan]kp doctor[/cyan] again.[/dim]")
