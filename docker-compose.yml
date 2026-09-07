@@ -1,0 +1,64 @@
+version: "3.9"
+
+# ============================================================
+# KP Docker Compose — Base Services
+# PostgreSQL + TimescaleDB + Redis
+# ============================================================
+
+services:
+
+  # ----------------------------------------------------------
+  # PostgreSQL 17 + TimescaleDB
+  # ----------------------------------------------------------
+  postgres:
+    image: timescale/timescaledb:latest-pg17
+    container_name: kp_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kp_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kp_dev_password}
+      POSTGRES_DB: kp_db
+      TIMESCALEDB_TELEMETRY: "off"
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kp_user -d kp_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - kp_network
+
+  # ----------------------------------------------------------
+  # Redis 7
+  # ----------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: kp_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kp_network
+
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local
+
+networks:
+  kp_network:
+    driver: bridge

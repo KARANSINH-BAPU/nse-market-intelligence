@@ -1,0 +1,50 @@
+# ============================================================
+# KP Frontend Dockerfile
+# Next.js standalone build
+# ============================================================
+
+FROM node:24-alpine AS base
+
+WORKDIR /app
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
+
+# ── Dependencies ──────────────────────────────────────────
+FROM base AS deps
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --only=production
+
+# ── Builder ───────────────────────────────────────────────
+FROM base AS builder
+
+COPY frontend/ ./
+COPY --from=deps /app/node_modules ./node_modules
+
+ENV NEXT_TELEMETRY_DISABLED=1
+ARG NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
+ARG NEXT_PUBLIC_WS_URL=ws://localhost:8000/ws
+ENV NEXT_PUBLIC_BACKEND_URL=$NEXT_PUBLIC_BACKEND_URL
+ENV NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL
+
+RUN npm run build
+
+# ── Production ────────────────────────────────────────────
+FROM base AS production
+
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+
+COPY --from=builder /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+USER nextjs
+EXPOSE 3000
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+  CMD wget -qO- http://localhost:3000/ | head -c 100 || exit 1
+
+CMD ["node", "server.js"]

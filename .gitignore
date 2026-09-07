@@ -1,0 +1,151 @@
+# ============================================================
+# KP — NSE Market Intelligence Platform
+# .gitignore
+# ============================================================
+
+# ---- SECRETS & CREDENTIALS --------------------------------
+.env
+.env.local
+.env.development
+.env.production
+.env.staging
+*.key
+*.pem
+*.p12
+*.pfx
+secrets/
+credentials/
+
+# ---- PYTHON -----------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.venv/
+venv/
+ENV/
+env/
+.uv/
+
+# ---- JUPYTER / NOTEBOOKS ----------------------------------
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ---- ML ARTIFACTS -----------------------------------------
+models/*.pkl
+models/*.joblib
+models/*.h5
+models/*.pt
+models/*.pth
+models/*.onnx
+models/*.bin
+models/checkpoints/
+ml/checkpoints/
+mlruns/
+wandb/
+
+# ---- DATA (vendor-restricted) -----------------------------
+data/raw/
+data/vendor/
+data/restricted/
+*.parquet
+*.feather
+*.arrow
+
+# ---- NODE / FRONTEND --------------------------------------
+frontend/node_modules/
+frontend/.next/
+frontend/.turbo/
+frontend/out/
+frontend/build/
+frontend/.env
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+node_modules/
+.pnp
+.pnp.js
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ---- DATABASE ---------------------------------------------
+*.db
+*.sqlite
+*.sqlite3
+dumps/
+backups/*.sql
+backups/*.dump
+
+# ---- LOGS -------------------------------------------------
+logs/
+*.log
+log/
+
+# ---- OS ---------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ---- IDE --------------------------------------------------
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+
+# ---- TESTING / COVERAGE -----------------------------------
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+junit*.xml
+
+# ---- BUILD ARTIFACTS --------------------------------------
+*.whl
+*.tar.gz
+*.zip
+
+# ---- MONITORING -------------------------------------------
+monitoring/grafana/data/
+monitoring/prometheus/data/
+
+# ---- DOCKER -----------------------------------------------
+# Keep docker files, ignore generated data volumes
+docker-data/
+pgdata/
+redisdata/
+
+# ---- MISC -------------------------------------------------
+.cache/
+tmp/
+temp/
+scratch/

@@ -1,0 +1,101 @@
+version: "3.9"
+
+# ============================================================
+# KP Docker Compose PRODUCTION
+# Full stack: PostgreSQL + TimescaleDB, Redis, Backend, Frontend
+# ============================================================
+
+services:
+
+  postgres:
+    image: timescale/timescaledb:latest-pg17
+    container_name: kp_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: kp_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: kp_db
+      TIMESCALEDB_TELEMETRY: "off"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kp_user -d kp_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - kp_internal
+    # DO NOT expose port to host in production
+    # ports: ["5432:5432"]
+
+  redis:
+    image: redis:7-alpine
+    container_name: kp_redis
+    restart: always
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD:-}
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kp_internal
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: kp_backend
+    restart: always
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://kp_user:${POSTGRES_PASSWORD}@postgres:5432/kp_db
+      REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - kp_internal
+      - kp_external
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+      args:
+        NEXT_PUBLIC_BACKEND_URL: http://backend:8000
+        NEXT_PUBLIC_WS_URL: ws://backend:8000/ws
+    container_name: kp_frontend
+    restart: always
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - kp_external
+
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local
+
+networks:
+  kp_internal:
+    driver: bridge
+    internal: true
+  kp_external:
+    driver: bridge
