@@ -10,8 +10,9 @@ Creates:
   - audit_logs table
   - data_quality table
 
-TimescaleDB hypertables will be created in subsequent migrations
-for time-series data (ticks, OHLCV, features).
+NOTE: PostgreSQL 18 is installed. TimescaleDB does not yet support PG18.
+Hypertables are deferred to a later migration when TimescaleDB adds PG18 support.
+All time-series tables use standard PostgreSQL TIMESTAMPTZ with date-range partitioning.
 """
 
 from __future__ import annotations
@@ -28,8 +29,9 @@ depends_on: str | None = None
 
 
 def upgrade() -> None:
-    # ── Enable extensions ────────────────────────────────────
-    op.execute("CREATE EXTENSION IF NOT EXISTS timescaledb")
+    # ── Enable extensions ────────────────────────────────────────────
+    # TimescaleDB not available for PG18 yet — skipping
+    # Will be added in migration 002 once TimescaleDB supports PG18
     op.execute('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"')
     op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
 
@@ -154,7 +156,7 @@ def upgrade() -> None:
     op.create_index("ix_audit_action", "audit_logs", ["action"])
     op.create_index("ix_audit_created", "audit_logs", ["created_at"])
 
-    # ── system_health ────────────────────────────────────────
+    # ── system_health ────────────────────────────────────────────
     op.create_table(
         "system_health",
         sa.Column("id", sa.BigInteger(), autoincrement=True, primary_key=True),
@@ -165,11 +167,8 @@ def upgrade() -> None:
         sa.Column("detail", JSONB(), nullable=True),
         sa.Column("checked_at", sa.DateTime(timezone=True), server_default=sa.text("now()")),
     )
-    # Convert to TimescaleDB hypertable (time-series)
-    op.execute(
-        "SELECT create_hypertable('system_health', 'checked_at', "
-        "chunk_time_interval => INTERVAL '1 day', if_not_exists => TRUE)"
-    )
+    # NOTE: TimescaleDB hypertable deferred until PG18 support is added
+    # op.execute("SELECT create_hypertable('system_health', 'checked_at', ...)")
     op.create_index("ix_syshealth_component", "system_health", ["component", "checked_at"])
 
     # ── watchlists ───────────────────────────────────────────

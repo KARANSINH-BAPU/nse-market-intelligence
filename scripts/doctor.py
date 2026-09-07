@@ -72,12 +72,19 @@ def _check_git() -> tuple[bool, str]:
 
 
 def _check_uv() -> tuple[bool, str]:
+    # Try python -m uv first (works even when uv binary isn't in PATH)
     result = subprocess.run(
         [sys.executable, "-m", "uv", "--version"],
         capture_output=True, text=True, timeout=10
     )
     if result.returncode == 0:
         return True, result.stdout.strip()
+    # Also try shutil.which as fallback
+    uv = shutil.which("uv")
+    if uv:
+        result2 = subprocess.run([uv, "--version"], capture_output=True, text=True, timeout=10)
+        if result2.returncode == 0:
+            return True, result2.stdout.strip()
     return False, "uv not found — install with: pip install uv"
 
 
