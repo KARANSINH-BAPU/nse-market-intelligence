@@ -20,7 +20,11 @@ from app.db.session import engine
 from app.db.redis import redis_client
 from app.api.v1.health import router as health_router
 from app.api.v1.system import router as system_router
+from app.api.v1.instruments import router as instruments_router
+from app.api.v1.market import router as market_router
 from app.websockets.manager import ws_manager
+# Import all models to register with SQLAlchemy metadata
+import app.models  # noqa: F401
 
 # ── Logging must be configured before first use ─────────────
 setup_logging()
@@ -106,6 +110,8 @@ def create_app() -> FastAPI:
     # ── Include Routers ─────────────────────────────────────
     app.include_router(health_router, prefix="", tags=["Health"])
     app.include_router(system_router, prefix="/api/v1/system", tags=["System"])
+    app.include_router(instruments_router, prefix="/api/v1/instruments", tags=["Instruments"])
+    app.include_router(market_router, prefix="/api/v1/market", tags=["Market"])
 
     # ── WebSocket Endpoint ──────────────────────────────────
     from fastapi import WebSocket, WebSocketDisconnect
