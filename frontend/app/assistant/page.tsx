@@ -92,10 +92,9 @@ async function respondToIntent(intent: ReturnType<typeof detectIntent>): Promise
 
     case "stock": {
       const sym = intent.symbol!;
-      // Try market/search first for fast price, then OHLCV for indicators
       const [searchRes, ohlcvRes] = await Promise.allSettled([
         fetch(`${API}/api/v1/market/search?q=${sym}&limit=1`).then(r => r.ok ? r.json() : null),
-        fetch(`${API}/api/v1/ohlcv/${sym}?period=1m`).then(r => r.ok ? r.json() : null),
+        fetch(`${API}/api/v1/ohlcv/${sym}?period=3m`).then(r => r.ok ? r.json() : null),
       ]);
 
       const sr = searchRes.status === "fulfilled" ? searchRes.value : null;
@@ -104,37 +103,122 @@ async function respondToIntent(intent: ReturnType<typeof detectIntent>): Promise
       const stockInfo = sr?.results?.[0] ?? null;
       const bars      = or?.bars ?? [];
       const latest    = bars[bars.length - 1] ?? null;
+      const prev5     = bars[bars.length - 6] ?? null;  // 5 days ago
 
-      const price    = stockInfo?.close ?? latest?.close;
+      const price     = stockInfo?.close ?? latest?.close;
       const changePct = stockInfo?.change_pct ?? latest?.change_pct;
-      const rsi      = latest?.rsi;
-      const macd     = latest?.macd;
-      const sma20    = latest?.sma20;
-      const high52   = bars.length ? Math.max(...bars.map((b: any) => b.high)) : null;
-      const low52    = bars.length ? Math.min(...bars.map((b: any) => b.low))  : null;
+      const rsi       = latest?.rsi;
+      const macd      = latest?.macd;
+      const macdHist  = latest?.macd_hist;
+      const sma20     = latest?.sma20;
+      const ema12     = latest?.ema12;
+      const high1M    = bars.length ? Math.max(...bars.map((b: any) => b.high)) : null;
+      const low1M     = bars.length ? Math.min(...bars.map((b: any) => b.low))  : null;
 
       if (!price) {
-        return `❌ **${sym}** — No data found.\n\nMake sure you're using an NSE symbol like RELIANCE, TCS, INFY, SBIN.\n\nTip: Try "Status of RELIANCE" or just type "RELIANCE"`;
+        return `❌ **${sym}** — No data found in database.\n\nMake sure you're using an exact NSE symbol.\nExamples: RELIANCE · TCS · INFY · SBIN · HDFCBANK · TATAMOTORS\n\nTip: Try "Status of RELIANCE" or just type "RELIANCE"`;
       }
 
-      const rsiSignal = rsi != null
-        ? (rsi < 30 ? "🟢 **Oversold** (BUY zone)" : rsi > 70 ? "🔴 **Overbought** (SELL zone)" : "⚪ Neutral")
-        : "—";
-      const macdSignal = macd != null ? (macd > 0 ? "📈 Bullish" : "📉 Bearish") : "—";
-      const trend = changePct != null ? (changePct >= 0 ? "📈 Bullish" : "📉 Bearish") : "—";
+      // ── AI Signal Analysis ───────────────────────────────
+      const signals: string[] = [];
+      let buyScore = 0;   // +1 per bullish signal
+      let sellScore = 0;  // +1 per bearish signal
 
-      return `📊 **${sym}** — ${stockInfo?.name ?? "NSE Stock"}\n\n` +
-        `💰 **Price:** ₹${price.toFixed(2)}\n` +
-        `📊 **Change:** ${changePct != null ? `${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%` : "—"}\n` +
-        `📈 **Trend:** ${trend}\n` +
-        `\n📉 **Technical Indicators:**\n` +
-        `• RSI(14): **${rsi?.toFixed(1) ?? "—"}** — ${rsiSignal}\n` +
-        `• MACD: **${macd?.toFixed(3) ?? "—"}** — ${macdSignal}\n` +
+      // RSI signals
+      if (rsi != null) {
+        if (rsi < 25)       { signals.push("🟢 RSI deeply oversold (<25) — Strong reversal potential"); buyScore += 2; }
+        else if (rsi < 35)  { signals.push("🟢 RSI oversold (<35) — Potential buying opportunity"); buyScore += 1; }
+        else if (rsi > 75)  { signals.push("🔴 RSI deeply overbought (>75) — Strong pullback risk"); sellScore += 2; }
+        else if (rsi > 65)  { signals.push("🔴 RSI overbought (>65) — Caution, may face selling"); sellScore += 1; }
+        else if (rsi > 45 && rsi < 55) { signals.push("⚪ RSI neutral (45-55) — No strong directional bias"); }
+        else if (rsi >= 40) { signals.push("🟡 RSI recovering — Momentum building"); buyScore += 0.5; }
+      }
+
+      // MACD signals
+      if (macd != null && macdHist != null) {
+        if (macd > 0 && macdHist > 0)  { signals.push("🟢 MACD bullish — Line above signal, histogram positive"); buyScore += 1; }
+        else if (macd > 0 && macdHist < 0) { signals.push("🟡 MACD weakening — Bullish but losing momentum"); }
+        else if (macd < 0 && macdHist < 0) { signals.push("🔴 MACD bearish — Line below signal, selling pressure"); sellScore += 1; }
+        else if (macd < 0 && macdHist > 0) { signals.push("🟡 MACD recovering — Bearish but improving"); buyScore += 0.5; }
+      }
+
+      // SMA signals
+      if (sma20 && price) {
+        const pctVsSma = ((price - sma20) / sma20) * 100;
+        if (price > sma20)  { signals.push(`🟢 Price above SMA20 (+${pctVsSma.toFixed(1)}%) — Uptrend confirmed`); buyScore += 1; }
+        else                { signals.push(`🔴 Price below SMA20 (${pctVsSma.toFixed(1)}%) — Downtrend, caution`); sellScore += 1; }
+      }
+
+      // EMA vs SMA
+      if (ema12 && sma20) {
+        if (ema12 > sma20) { signals.push("🟢 EMA12 > SMA20 — Golden momentum crossover"); buyScore += 0.5; }
+        else               { signals.push("🔴 EMA12 < SMA20 — Death cross pattern"); sellScore += 0.5; }
+      }
+
+      // 5-day trend
+      if (prev5 && price) {
+        const trend5d = ((price - prev5.close) / prev5.close) * 100;
+        if (trend5d > 3)       { signals.push(`📈 Strong 5-day momentum: +${trend5d.toFixed(1)}%`); buyScore += 0.5; }
+        else if (trend5d < -3) { signals.push(`📉 Weak 5-day momentum: ${trend5d.toFixed(1)}%`); sellScore += 0.5; }
+      }
+
+      // ── Generate Recommendation ─────────────────────────
+      let recommendation: string;
+      let timeHorizon: string;
+      let confidence: string;
+      let action: string;
+      let emoji: string;
+
+      const totalScore = buyScore - sellScore;
+
+      if (totalScore >= 2.5) {
+        action = "STRONG BUY"; emoji = "🚀"; confidence = "High";
+        timeHorizon = "1–4 weeks (short-term swing)";
+        recommendation = `Multiple strong bullish indicators aligned. Consider buying on dips near SMA20 support.`;
+      } else if (totalScore >= 1.5) {
+        action = "BUY"; emoji = "✅"; confidence = "Moderate-High";
+        timeHorizon = "2–6 weeks (medium-term swing)";
+        recommendation = `More bullish signals than bearish. Good entry point if market conditions hold.`;
+      } else if (totalScore >= 0.5) {
+        action = "CAUTIOUS BUY"; emoji = "🟡"; confidence = "Moderate";
+        timeHorizon = "4–8 weeks — Wait for confirmation";
+        recommendation = `Slightly bullish but mixed signals. Consider waiting for RSI confirmation or SMA breakout.`;
+      } else if (totalScore > -0.5) {
+        action = "HOLD"; emoji = "⏳"; confidence = "Neutral";
+        timeHorizon = "Review in 1–2 weeks";
+        recommendation = `Mixed signals — no clear direction. Existing holders should hold; new buyers should wait.`;
+      } else if (totalScore > -1.5) {
+        action = "CAUTIOUS SELL"; emoji = "⚠️"; confidence = "Moderate";
+        timeHorizon = "Exit in 1–2 weeks if trend continues";
+        recommendation = `More bearish than bullish. Consider reducing position or setting stop-loss.`;
+      } else {
+        action = "SELL / AVOID"; emoji = "🔴"; confidence = "High";
+        timeHorizon = "Avoid for 2–4 weeks";
+        recommendation = `Multiple bearish indicators. Existing holders should consider exiting. New buyers should wait.`;
+      }
+
+      return `📊 **${sym} — ${stockInfo?.name ?? "NSE Stock"}**\n\n` +
+        `💰 **Price:** ₹${price.toLocaleString("en-IN", { maximumFractionDigits: 2 })}\n` +
+        `📊 **Today:** ${changePct != null ? `${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%` : "—"}\n\n` +
+
+        `${"─".repeat(38)}\n` +
+        `${emoji} **AI RECOMMENDATION: ${action}**\n` +
+        `⏱️ **Time Horizon:** ${timeHorizon}\n` +
+        `📈 **Confidence:** ${confidence}\n` +
+        `💡 ${recommendation}\n` +
+        `${"─".repeat(38)}\n\n` +
+
+        `🔍 **Signal Analysis:**\n${signals.map(s => `• ${s}`).join("\n")}\n\n` +
+
+        `📉 **Technical Values:**\n` +
+        `• RSI(14): **${rsi?.toFixed(1) ?? "—"}**\n` +
+        `• MACD: **${macd?.toFixed(3) ?? "—"}** | Hist: ${macdHist?.toFixed(3) ?? "—"}\n` +
         `• SMA(20): **${sma20 != null ? `₹${sma20.toFixed(2)}` : "—"}**\n` +
-        `• Price vs SMA20: **${sma20 && price ? (price > sma20 ? "Above ↑ Bullish" : "Below ↓ Bearish") : "—"}**\n` +
-        (high52 ? `\n📐 **1-Month Range:** ₹${low52!.toFixed(2)} — ₹${high52.toFixed(2)}\n` : "") +
-        (bars.length ? `\n📅 **Data:** ${bars.length} trading days · Source: NSE ohlcv_daily\n` : "") +
-        `\n*⚠️ Technical analysis only — NOT financial advice*`;
+        `• EMA(12): **${ema12 != null ? `₹${ema12.toFixed(2)}` : "—"}**\n` +
+        (high1M ? `• 3-Month Range: ₹${low1M!.toFixed(2)} — ₹${high1M.toFixed(2)}\n` : "") +
+        `• Data: ${bars.length} bars from NSE ohlcv_daily\n\n` +
+
+        `⚠️ *This is AI technical analysis for educational purposes. NOT financial advice. Always consult a SEBI-registered advisor before investing.*`;
     }
 
     case "gainers": {
@@ -225,14 +309,14 @@ async function respondToIntent(intent: ReturnType<typeof detectIntent>): Promise
 
     case "news": {
       const r = await fetch(`${API}/api/v1/news?limit=5`);
-      if (!r.ok) return "⚠️ Could not fetch news right now.";
+      if (!r.ok) return "⚠️ Could not fetch news right now. Visit /news page.";
       const d = await r.json();
-      const articles = d.articles ?? d ?? [];
-      if (!articles.length) return "No news articles available. Check /news page for updates.";
+      const articles = d.news ?? d.articles ?? [];
+      if (!articles.length) return "📰 No news articles available right now. Visit /news for the full live news feed.";
       const lines = articles.slice(0, 5).map((a: any, i: number) =>
-        `${i + 1}. **${a.title?.slice(0, 80) ?? "—"}**\n   Source: ${a.source ?? "—"} · ${a.published_at?.slice(0, 10) ?? ""}`
+        `${i + 1}. **${a.title?.slice(0, 90) ?? "—"}**\n   ${a.source ?? ""} · ${a.published?.slice(0, 10) ?? ""}`
       ).join("\n\n");
-      return `📰 **Latest Market News**\n\n${lines}\n\nVisit /news for full news feed.`;
+      return `📰 **Latest Market News**\n\n${lines}\n\nFor full news feed → **/news page**`;
     }
 
     case "help":

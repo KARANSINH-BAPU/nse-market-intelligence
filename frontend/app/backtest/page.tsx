@@ -44,7 +44,6 @@ export default function BacktestPage() {
       if (bars.length < 30) { setError("Not enough historical data (need 30+ bars)"); return; }
 
       const closes  = bars.map((b: any) => b.close);
-      const rsisArr = feat.rsi_series ?? [];
       const trades: Trade[] = [];
       let inPosition = false;
       let buyPrice   = 0;
@@ -52,7 +51,7 @@ export default function BacktestPage() {
       let wins       = 0;
 
       for (let i = 26; i < bars.length; i++) {
-        const rsi  = rsisArr[i] ?? 50;
+        const rsi  = (bars[i].rsi ?? 50) as number;
         const price = closes[i];
         const date  = bars[i].trade_date ?? bars[i].date ?? `Day ${i}`;
 

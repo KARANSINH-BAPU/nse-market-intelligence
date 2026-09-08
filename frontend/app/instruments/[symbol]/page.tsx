@@ -36,7 +36,8 @@ function fmtVol(n: number | null | undefined) {
 interface Bar {
   trade_date: string; open: number; high: number; low: number;
   close: number; volume: number; change_pct: number;
-  rsi: number | null; macd: number | null; sma20: number | null; ema12: number | null;
+  rsi: number | null; macd: number | null; macd_signal: number | null;
+  macd_hist: number | null; sma20: number | null; ema12: number | null;
 }
 interface OhlcvData {
   symbol: string; period: string; count: number; bars: Bar[];
@@ -100,11 +101,21 @@ export default function InstrumentDetailPage() {
   const change = quote?.change_pct ?? latest?.change_pct;
   const up     = (change ?? 0) >= 0;
 
-  // For TechnicalChart — map bar → features format
+  // For TechnicalChart — MUST match FeatureRow interface exactly:
+  // date, close, open, high, low, volume, rsi_14, macd_line, macd_signal, macd_hist, sma_20, ema_12
   const chartFeatures = (data?.bars ?? []).map(b => ({
-    trade_date: b.trade_date,
-    close: b.close, open: b.open, high: b.high, low: b.low, volume: b.volume,
-    rsi_14: b.rsi, macd_line: b.macd, sma_20: b.sma20, ema_12: b.ema12,
+    date:        b.trade_date,
+    close:       b.close,
+    open:        b.open,
+    high:        b.high,
+    low:         b.low,
+    volume:      b.volume,
+    rsi_14:      b.rsi,
+    macd_line:   b.macd,
+    macd_signal: b.macd_signal,
+    macd_hist:   b.macd_hist,
+    sma_20:      b.sma20,
+    ema_12:      b.ema12,
   }));
 
   return (
