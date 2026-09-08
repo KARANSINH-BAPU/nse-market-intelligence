@@ -35,9 +35,9 @@ const NAV_SECTIONS: NavSection[] = [
   {
     title: "Intelligence",
     items: [
+      { label: "Screener",       href: "/screener",  icon: Search,  badge: "NEW" },
       { label: "AI Radar",       href: "/radar",     icon: Radar },
       { label: "Market Brain",   href: "/brain",     icon: Brain },
-      { label: "Screener",       href: "/screener",  icon: Search },
       { label: "Sectors",        href: "/sectors",   icon: Building2 },
     ],
   },

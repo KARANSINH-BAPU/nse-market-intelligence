@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { Search, Sun, Moon, Bell, Command } from "lucide-react";
 import { SystemStatus } from "@/components/ui/SystemStatus";
+import { TickerStrip } from "@/components/ui/TickerStrip";
 
 export function Header() {
   const [theme, setTheme] = useState<"dark" | "light">("dark");
@@ -53,6 +54,9 @@ export function Header() {
       </div>
 
       <div className="header-spacer" />
+
+      {/* Live index ticker */}
+      <TickerStrip />
 
       {/* IST Clock */}
       <div style={{
