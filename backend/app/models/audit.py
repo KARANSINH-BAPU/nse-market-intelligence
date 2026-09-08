@@ -1,5 +1,5 @@
 """
-KP Backend — Watchlist and AuditLog ORM Models
+KP Backend — AuditLog ORM Model
 Matches actual DB schema from migration 001.
 """
 from __future__ import annotations
@@ -11,23 +11,6 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
-
-
-class Watchlist(Base, TimestampMixin):
-    """
-    User watchlist. UUID PK.
-    symbols stored as JSONB (not ARRAY) per DB schema.
-    """
-    __tablename__ = "watchlists"
-
-    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
-    user_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False, index=True)
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    symbols: Mapped[dict] = mapped_column(JSONB, nullable=False, default=list)
-
-    def __repr__(self) -> str:
-        return f"<Watchlist '{self.name}'>"
 
 
 class AuditLog(Base):

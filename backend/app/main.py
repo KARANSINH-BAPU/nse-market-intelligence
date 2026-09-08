@@ -23,6 +23,7 @@ from app.api.v1.system import router as system_router
 from app.api.v1.instruments import router as instruments_router
 from app.api.v1.market import router as market_router
 from app.api.v1.auth import router as auth_router
+from app.api.v1.watchlist import router as watchlist_router
 from app.websockets.manager import ws_manager
 # Import all models to register with SQLAlchemy metadata
 import app.models  # noqa: F401
@@ -114,6 +115,7 @@ def create_app() -> FastAPI:
     app.include_router(instruments_router, prefix="/api/v1/instruments", tags=["Instruments"])
     app.include_router(market_router, prefix="/api/v1/market", tags=["Market"])
     app.include_router(auth_router, prefix="/api/v1/auth", tags=["Auth"])
+    app.include_router(watchlist_router, prefix="/api/v1/watchlist", tags=["Watchlist"])
 
     # ── WebSocket Endpoint ──────────────────────────────────
     from fastapi import WebSocket, WebSocketDisconnect
