@@ -146,15 +146,22 @@ export function Dashboard() {
   const [tradeDate, setTradeDate] = useState<string>("");
   const [loading,   setLoading]   = useState(true);
   const [lastAt,    setLastAt]    = useState<Date | null>(null);
+  const [indices,   setIndices]   = useState<Record<string,{ltp:number;change:number;change_pct:number}>>({});
+
+  const KEY_MAP: Record<string,string> = {
+    NIFTY50:"NIFTY 50", BANKNIFTY:"BANK NIFTY", SENSEX:"SENSEX",
+    "NIFTY 50":"NIFTY 50", "NIFTY BANK":"BANK NIFTY", "BANK NIFTY":"BANK NIFTY",
+  };
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [moversRes, breadthRes, sectorRes, sigRes] = await Promise.allSettled([
+      const [moversRes, breadthRes, sectorRes, sigRes, snapRes] = await Promise.allSettled([
         fetch(`${API}/api/v1/market/movers?limit=10`).then(r => r.json()),
         fetch(`${API}/api/v1/market/breadth`).then(r => r.json()),
         fetch(`${API}/api/v1/market/sector-performance`).then(r => r.json()),
         fetch(`${API}/api/v1/signals?limit=20&strength=STRONG`).then(r => r.json()),
+        fetch(`${API}/api/v1/market/snapshot`).then(r => r.json()),
       ]);
 
       if (moversRes.status === "fulfilled") {
@@ -165,6 +172,14 @@ export function Dashboard() {
       if (breadthRes.status === "fulfilled") setBreadth(breadthRes.value);
       if (sectorRes.status === "fulfilled")  setSectors(sectorRes.value || []);
       if (sigRes.status === "fulfilled")     setSignals(sigRes.value.signals || []);
+      if (snapRes.status === "fulfilled" && snapRes.value.indices) {
+        const mapped: Record<string,any> = {};
+        for (const [k, v] of Object.entries(snapRes.value.indices as Record<string,any>)) {
+          const key = KEY_MAP[k] ?? k;
+          mapped[key] = v;
+        }
+        setIndices(mapped);
+      }
       setLastAt(new Date());
     } finally {
       setLoading(false);
@@ -199,6 +214,39 @@ export function Dashboard() {
           Refresh
         </button>
       </div>
+
+      {/* NIFTY / SENSEX / BANKNIFTY Hero Cards */}
+      {Object.keys(indices).length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px,1fr))",
+          gap: 12, marginBottom: 16 }}>
+          {["NIFTY 50","BANK NIFTY","SENSEX"].map(key => {
+            const idx = indices[key];
+            if (!idx) return null;
+            const up  = idx.change_pct >= 0;
+            const col = up ? "var(--color-up)" : "var(--color-down)";
+            return (
+              <div key={key} className="card" style={{ padding: "16px 18px",
+                background: `linear-gradient(135deg, var(--surface-02), ${up ? "rgba(34,197,94,0.06)" : "rgba(239,68,68,0.06)"})`,
+                borderColor: up ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)" }}>
+                <div style={{ fontSize: "0.786rem", fontWeight: 700, color: "var(--text-secondary)",
+                  marginBottom: 4 }}>{key}</div>
+                <div style={{ fontFamily: "var(--font-mono)", fontWeight: 900,
+                  fontSize: "1.5rem", color: col, lineHeight: 1 }}>
+                  {idx.ltp.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 4 }}>
+                  <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, fontSize: "0.9rem", color: col }}>
+                    {up ? "▲" : "▼"} {idx.change_pct >= 0 ? "+" : ""}{idx.change_pct.toFixed(2)}%
+                  </span>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.786rem", color: "var(--text-tertiary)" }}>
+                    ({idx.change >= 0 ? "+" : ""}{idx.change.toFixed(2)})
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Market Breadth Banner */}
       {breadth && (
