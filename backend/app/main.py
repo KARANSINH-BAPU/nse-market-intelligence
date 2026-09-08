@@ -12,7 +12,6 @@ from typing import AsyncGenerator
 import structlog
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.config import settings
@@ -98,11 +97,20 @@ def create_app() -> FastAPI:
     )
 
     # ── Middleware ──────────────────────────────────────────
+    # Parse origins — stored as comma-separated string in env
+    origins: list[str] = (
+        [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]
+        if isinstance(settings.ALLOWED_ORIGINS, str)
+        else list(settings.ALLOWED_ORIGINS)
+    )
+    # In dev/test allow all origins so WebSocket connections from the browser work
+    if settings.ENVIRONMENT in ("development", "test"):
+        origins = ["*"]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.ALLOWED_ORIGINS,
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_origins=origins,
+        allow_credentials=origins != ["*"],   # credentials incompatible with wildcard
+        allow_methods=["*"],
         allow_headers=["*"],
         expose_headers=["X-Request-ID", "X-Process-Time"],
     )
@@ -112,6 +120,9 @@ def create_app() -> FastAPI:
     async def add_process_time_and_request_id(
         request: Request, call_next: object
     ) -> Response:
+        # WebSocket upgrades arrive via HTTP middleware too — pass them through
+        if request.scope.get("type") == "websocket":
+            return await call_next(request)   # type: ignore[operator]
         import uuid
         request_id = str(uuid.uuid4())
         start = time.perf_counter()

@@ -20,7 +20,7 @@ router = APIRouter()
 
 async def _get_pg_conn() -> asyncpg.Connection:
     settings = get_settings()
-    url = settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
+    url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
     return await asyncpg.connect(url)
 
 
