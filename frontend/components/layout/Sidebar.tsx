@@ -29,7 +29,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { label: "Dashboard",      href: "/",          icon: LayoutDashboard },
       { label: "Markets",        href: "/markets",   icon: Activity,     badge: "LIVE", badgeVariant: "live" },
-      { label: "Stocks",         href: "/stocks",    icon: TrendingUp },
+      { label: "Stocks",         href: "/stocks",    icon: TrendingUp,  badge: "2K+", badgeVariant: "new" },
     ],
   },
   {
@@ -38,21 +38,21 @@ const NAV_SECTIONS: NavSection[] = [
       { label: "Screener",       href: "/screener",  icon: Search,  badge: "NEW", badgeVariant: "new" },
       { label: "AI Radar",       href: "/radar",     icon: Radar },
       { label: "Market Brain",   href: "/brain",     icon: Brain },
-      { label: "Sectors",        href: "/sectors",   icon: Building2 },
+      { label: "Sectors",        href: "/sectors",   icon: Building2,   badge: "NEW", badgeVariant: "new" },
     ],
   },
   {
     title: "Data",
     items: [
-      { label: "Instruments",    href: "/instruments", icon: BarChart2, badge: "8.2k" },
-      { label: "News",           href: "/news",      icon: Newspaper },
+      { label: "Instruments",    href: "/instruments", icon: BarChart2, badge: "2.5K" },
+      { label: "News",           href: "/news",      icon: Newspaper,    badge: "NEW", badgeVariant: "new" },
       { label: "F&O",            href: "/fno",       icon: BarChart2 },
     ],
   },
   {
     title: "Research",
     items: [
-      { label: "Predictions",    href: "/predictions",  icon: Dna },
+      { label: "Predictions",    href: "/predictions",  icon: Dna,   badge: "NEW", badgeVariant: "new" },
       { label: "Backtesting",    href: "/backtest",     icon: TestTube2 },
       { label: "Market Replay",  href: "/replay",       icon: History },
       { label: "Model Lab",      href: "/models",       icon: FlaskConical },
