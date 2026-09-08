@@ -3,11 +3,18 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { api, IndexQuote, OHLCVResponse } from "@/lib/api";
 import {
   TrendingUp, TrendingDown, ArrowLeft, RefreshCw,
   BarChart2, Activity, Database, ExternalLink,
 } from "lucide-react";
+
+// Lazy-load recharts chart (reduces initial bundle)
+const TechnicalChart = dynamic(
+  () => import("@/components/charts/TechnicalChart"),
+  { ssr: false, loading: () => <div style={{ height: 480, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-tertiary)" }}>Loading chart…</div> }
+);
 
 function fmt(n: number | null | undefined, d = 2) {
   if (n == null) return "—";
@@ -30,6 +37,7 @@ export default function InstrumentDetailPage() {
 
   const [quote, setQuote]     = useState<IndexQuote | null>(null);
   const [ohlcv, setOhlcv]     = useState<OHLCVResponse | null>(null);
+  const [features, setFeatures] = useState<any[]>([]);
   const [period, setPeriod]   = useState("1mo");
   const [loading, setLoading] = useState(false);
   const [lastAt, setLastAt]   = useState<Date | null>(null);
@@ -45,6 +53,11 @@ export default function InstrumentDetailPage() {
       setQuote(q);
       setOhlcv(o);
       setLastAt(new Date());
+      // Fetch features (252 bars) for chart
+      try {
+        const f = await fetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/api/v1/features/${SYM}?lookback=252`);
+        if (f.ok) { const fd = await f.json(); setFeatures(fd.features ?? []); }
+      } catch { /* features are optional */ }
     } finally { setLoading(false); }
   }, [SYM, period]);
 
@@ -204,6 +217,24 @@ export default function InstrumentDetailPage() {
       <style>{`
         @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
       `}</style>
+
+      {/* Technical Chart */}
+      <div className="card" style={{ marginTop: 16 }}>
+        <div className="card-header" style={{ marginBottom: 16 }}>
+          <span className="card-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <Activity size={14} /> Technical Indicators
+          </span>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {features.length > 0 && (
+              <span style={{ fontSize: "0.714rem", color: "var(--text-tertiary)" }}>
+                {features.length} bars · RSI/MACD/EMA
+              </span>
+            )}
+            <span className="data-source">ohlcv_daily</span>
+          </div>
+        </div>
+        <TechnicalChart data={features} symbol={SYM} height={500} />
+      </div>
     </div>
   );
 }

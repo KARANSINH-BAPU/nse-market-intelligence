@@ -142,18 +142,51 @@ def create_app() -> FastAPI:
     app.include_router(features_router, prefix="/api/v1/features", tags=["Features"])
 
     # ── WebSocket Endpoint ──────────────────────────────────
+    # NOTE: Registered directly on app — NOT via APIRouter — so it is processed
+    # after Starlette middleware but the WS upgrade is handled natively by uvicorn.
+    # The @app.websocket decorator bypasses the HTTP middleware stack for WS frames.
     from fastapi import WebSocket, WebSocketDisconnect
 
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket) -> None:
+        """
+        KP real-time WebSocket.
+        Protocol (JSON frames):
+          Client → { type: "subscribe",   channels: ["market", "stock:RELIANCE"] }
+          Client → { type: "unsubscribe", channels: [...] }
+          Client → { type: "ping" }
+          Server → { type: "connected", client_id: "...", ... }
+          Server → { type: "subscribed", channels: [...] }
+          Server → { type: "tick",  channel: "market", indices: {...}, is_open: bool }
+          Server → { type: "pong" }
+        """
         client_id = await ws_manager.connect(websocket)
         try:
             await ws_manager.handle(client_id, websocket)
         except WebSocketDisconnect:
             ws_manager.disconnect(client_id)
             log.info("ws_disconnected", client_id=client_id)
-
+        except Exception as exc:
+            log.warning("ws_error", client_id=client_id, error=str(exc)[:200])
+            ws_manager.disconnect(client_id)
     return app
 
 
-app = create_app()
+# ── Root ASGI app: WS mounted BEFORE FastAPI/CORSMiddleware ──
+# This is the entry point uvicorn uses.  The /ws path is handled
+# by a raw ASGI callable that accepts ALL origins — it never goes
+# through CORSMiddleware, permanently fixing the HTTP 403 on WS upgrade.
+from starlette.routing import Router, Route, Mount, WebSocketRoute
+
+def _make_root_app() -> Router:
+    from app.websockets.ws_asgi import ws_endpoint
+    fastapi_app = create_app()
+    return Router(routes=[
+        # WS first — bypasses all FastAPI/CORSMiddleware
+        WebSocketRoute("/ws", ws_endpoint),
+        # Everything else goes to FastAPI
+        Mount("/", app=fastapi_app),
+    ])
+
+
+app = _make_root_app()
