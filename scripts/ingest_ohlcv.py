@@ -148,23 +148,26 @@ async def main() -> None:
     print(f"Workers  : {args.workers}")
     print(f"Dry run  : {args.dry_run}")
 
-    conn = await asyncpg.connect(pg_url)
+    # Use a connection pool — each worker gets its own connection
+    pool = await asyncpg.create_pool(pg_url, min_size=1, max_size=min(args.workers, 10))
 
     if args.symbol:
         symbols = [(None, args.symbol.upper())]
         # Get instrument ID
-        row = await conn.fetchrow(
-            "SELECT id::text FROM instruments WHERE symbol=$1 AND exchange='NSE'",
-            args.symbol.upper(),
-        )
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT id::text FROM instruments WHERE symbol=$1 AND exchange='NSE'",
+                args.symbol.upper(),
+            )
         if row:
             symbols = [(row["id"], args.symbol.upper())]
         else:
             print(f"Symbol {args.symbol} not found in instruments table")
-            await conn.close()
+            await pool.close()
             return
     else:
-        symbols = await _fetch_symbols(conn, args.limit)
+        async with pool.acquire() as conn:
+            symbols = await _fetch_symbols(conn, args.limit)
 
     print(f"Symbols  : {len(symbols)}\n")
 
@@ -173,10 +176,10 @@ async def main() -> None:
         for _, sym in symbols[:5]:
             print(f"  {sym}")
         print("\nDry run complete. No data written.")
-        await conn.close()
+        await pool.close()
         return
 
-    # Semaphore to limit concurrency
+    # Semaphore to limit concurrency (yfinance rate limit)
     sem = asyncio.Semaphore(args.workers)
     total_bars = 0
     processed = 0
@@ -188,15 +191,23 @@ async def main() -> None:
         async with sem:
             bars = await _fetch_yf(symbol, args.period)
             if bars:
-                count = await _upsert_bars(conn, instrument_id, symbol, bars)
+                # Each coroutine acquires its own dedicated connection
+                async with pool.acquire() as conn:
+                    count = await _upsert_bars(conn, instrument_id, symbol, bars)
                 total_bars += count
             else:
                 errors += 1
             processed += 1
             if processed % 50 == 0 or processed == len(symbols):
                 pct = int(processed / len(symbols) * 100)
-                print(f"\r  {pct}% ({processed}/{len(symbols)}) — {total_bars:,} bars, {errors} errors",
-                      end="", flush=True)
+                elapsed_now = time.monotonic() - start
+                rate = processed / max(elapsed_now, 0.1)
+                eta = int((len(symbols) - processed) / max(rate, 0.01))
+                print(
+                    f"\r  {pct:3d}% ({processed:,}/{len(symbols):,})"
+                    f"  bars={total_bars:,}  err={errors}  ETA={eta}s  ",
+                    end="", flush=True,
+                )
 
     tasks = [process(iid, sym) for iid, sym in symbols]
     await asyncio.gather(*tasks)
@@ -208,7 +219,7 @@ async def main() -> None:
     print(f"  Errors    : {errors}")
     print(f"  Rate      : {processed / elapsed:.1f} symbols/s")
 
-    await conn.close()
+    await pool.close()
 
 
 if __name__ == "__main__":

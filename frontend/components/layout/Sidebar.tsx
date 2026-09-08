@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -15,7 +15,7 @@ interface NavItem {
   href: string;
   icon: React.ElementType;
   badge?: string;
-  badgeVariant?: "default" | "live";
+  badgeVariant?: "default" | "live" | "new";
 }
 
 interface NavSection {
@@ -35,7 +35,7 @@ const NAV_SECTIONS: NavSection[] = [
   {
     title: "Intelligence",
     items: [
-      { label: "Screener",       href: "/screener",  icon: Search,  badge: "NEW" },
+      { label: "Screener",       href: "/screener",  icon: Search,  badge: "NEW", badgeVariant: "new" },
       { label: "AI Radar",       href: "/radar",     icon: Radar },
       { label: "Market Brain",   href: "/brain",     icon: Brain },
       { label: "Sectors",        href: "/sectors",   icon: Building2 },
@@ -44,7 +44,7 @@ const NAV_SECTIONS: NavSection[] = [
   {
     title: "Data",
     items: [
-      { label: "Instruments",    href: "/instruments", icon: BarChart2, badge: "2583" },
+      { label: "Instruments",    href: "/instruments", icon: BarChart2, badge: "8.2k" },
       { label: "News",           href: "/news",      icon: Newspaper },
       { label: "F&O",            href: "/fno",       icon: BarChart2 },
     ],
@@ -61,9 +61,9 @@ const NAV_SECTIONS: NavSection[] = [
   {
     title: "Portfolio",
     items: [
-      { label: "Portfolio",      href: "/portfolio",    icon: Briefcase },
+      { label: "Portfolio",      href: "/portfolio",    icon: Briefcase,  badge: "NEW", badgeVariant: "new" },
       { label: "Paper Trading",  href: "/paper",        icon: TestTube2 },
-      { label: "Alerts",         href: "/alerts",       icon: BellRing },
+      { label: "Alerts",         href: "/alerts",       icon: BellRing,   badge: "NEW", badgeVariant: "new" },
     ],
   },
   {
@@ -78,6 +78,15 @@ const NAV_SECTIONS: NavSection[] = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const [status, setStatus] = useState<"online" | "offline">("offline");
+
+  useEffect(() => {
+    const ws = new WebSocket("ws://localhost:8000/ws");
+    ws.onopen = () => setStatus("online");
+    ws.onclose = () => setStatus("offline");
+    ws.onerror = () => setStatus("offline");
+    return () => { try { ws.close(); } catch {} };
+  }, []);
 
   return (
     <nav className="sidebar" aria-label="KP main navigation">
@@ -111,7 +120,11 @@ export function Sidebar() {
                   <Icon className="nav-icon" size={16} />
                   <span>{item.label}</span>
                   {item.badge && (
-                    <span className={`nav-badge${item.badgeVariant === "live" ? " live" : ""}`}>
+                    <span className={`nav-badge${
+                      item.badgeVariant === "live" ? " live"
+                      : item.badgeVariant === "new" ? " new-badge"
+                      : ""
+                    }`}>
                       {item.badge}
                     </span>
                   )}
@@ -125,12 +138,17 @@ export function Sidebar() {
       {/* Footer status */}
       <div className="sidebar-footer">
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div className="status-dot unknown" />
+          <div style={{
+            width: 7, height: 7, borderRadius: "50%",
+            background: status === "online" ? "var(--color-up)" : "var(--text-tertiary)",
+            animation: status === "online" ? "pulse 2s ease-in-out infinite" : "none",
+          }} />
           <span style={{ fontSize: "0.714rem", color: "var(--text-tertiary)" }}>
-            Market Closed
+            {status === "online" ? "WS Connected" : "WS Offline"}
           </span>
         </div>
       </div>
+      <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
     </nav>
   );
 }

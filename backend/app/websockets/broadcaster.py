@@ -66,18 +66,37 @@ async def market_ticker_loop() -> None:
 
         try:
             snap = await cached_snapshot()
+            is_open = _is_market_open()
+            indices = snap.get("indices", {})
             msg = {
                 "type":    "tick",
                 "channel": "market",
                 "ts":      datetime.now(timezone.utc).isoformat(),
                 "phase":   snap.get("cache", ""),   # HIT or MISS
-                "is_open": _is_market_open(),
-                "indices": snap.get("indices", {}),
+                "is_open": is_open,
+                "indices": indices,
             }
             n = await ws_manager.broadcast_to_channel("market", msg)
             log.debug("market_tick_broadcast", clients=n,
-                      nifty=snap.get("indices", {}).get("NIFTY50", {}).get("ltp"))
+                      nifty=indices.get("NIFTY 50", {}).get("ltp"))
             consecutive_errors = 0
+
+            # ── Alert checking ──────────────────────────────────────────
+            # Check each index LTP against any active alerts
+            try:
+                from app.api.v1.alerts import check_alerts
+                for sym, quote in indices.items():
+                    ltp = quote.get("ltp")
+                    if ltp is None:
+                        continue
+                    triggered = await check_alerts(sym, ltp)
+                    for alert_msg in triggered:
+                        # Push to ALL connected clients (alerts are global in dev mode)
+                        await ws_manager.broadcast_to_channel("market", alert_msg)
+                        log.info("alert_triggered", symbol=sym, alert_type=alert_msg.get("alert_type"),
+                                 threshold=alert_msg.get("threshold"), ltp=ltp)
+            except Exception as alert_exc:
+                log.warning("alert_check_error", error=str(alert_exc)[:100])
 
         except asyncio.CancelledError:
             log.info("market_ticker_cancelled")

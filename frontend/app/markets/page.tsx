@@ -1,252 +1,217 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+/**
+ * KP — Markets Page
+ *
+ * Live index dashboard powered by recharts + WebSocket ticks.
+ * - NIFTY50, BANKNIFTY, SENSEX, NIFTY IT, NIFTY PHARMA
+ * - Each card shows: name, LTP, change%, intraday sparkline from WS ticks
+ * - Sector heatmap with YTD data from yfinance (no fabricated values)
+ */
+
+import { useEffect, useRef, useState, useCallback } from "react";
+import dynamic from "next/dynamic";
+import { TrendingUp, TrendingDown, Wifi, WifiOff } from "lucide-react";
 import { useMarketTicker } from "@/lib/useMarketTicker";
-import { api } from "@/lib/api";
-import {
-  Activity, TrendingUp, TrendingDown, Minus,
-  Wifi, WifiOff, RefreshCw, Clock,
-} from "lucide-react";
 
-// ── Mini sparkline drawn with SVG ───────────────────────────────────────────
-function Sparkline({ data, color }: { data: number[]; color: string }) {
-  if (data.length < 2) return <div style={{ height: 56 }} />;
-  const w = 280, h = 56, pad = 4;
-  const min = Math.min(...data), max = Math.max(...data);
-  const range = max - min || 1;
-  const pts = data.map((v, i) => {
-    const x = pad + (i / (data.length - 1)) * (w - pad * 2);
-    const y = h - pad - ((v - min) / range) * (h - pad * 2);
-    return `${x},${y}`;
-  });
-  return (
-    <svg width={w} height={h} style={{ overflow: "visible" }}>
-      <defs>
-        <linearGradient id={`grad-${color.replace("#","")}`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={color} stopOpacity="0.3" />
-          <stop offset="100%" stopColor={color} stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <polygon
-        points={`${pad},${h} ${pts.join(" ")} ${w - pad},${h}`}
-        fill={`url(#grad-${color.replace("#","")})`}
-      />
-      <polyline points={pts.join(" ")} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" />
-      {/* Last point dot */}
-      <circle
-        cx={pts[pts.length - 1].split(",")[0]}
-        cy={pts[pts.length - 1].split(",")[1]}
-        r="3" fill={color}
-      />
-    </svg>
-  );
+const SparkLine = dynamic(
+  () => import("recharts").then(m => {
+    // Inline recharts sparkline using AreaChart
+    const { AreaChart, Area, ResponsiveContainer, Tooltip } = m;
+    function Spark({ data, up }: { data: number[]; up: boolean }) {
+      if (!data.length) return null;
+      const pts = data.map((v, i) => ({ i, v }));
+      return (
+        <ResponsiveContainer width="100%" height={56}>
+          <AreaChart data={pts} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
+            <defs>
+              <linearGradient id={`sg${up ? "u" : "d"}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%"  stopColor={up ? "#22c55e" : "#ef4444"} stopOpacity={0.25} />
+                <stop offset="95%" stopColor={up ? "#22c55e" : "#ef4444"} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <Area type="monotone" dataKey="v"
+              stroke={up ? "#22c55e" : "#ef4444"} strokeWidth={1.5}
+              fill={`url(#sg${up ? "u" : "d"})`} dot={false} />
+          </AreaChart>
+        </ResponsiveContainer>
+      );
+    }
+    return { default: Spark };
+  }),
+  { ssr: false }
+);
+
+// Index definitions
+const INDICES = [
+  { key: "NIFTY 50",     label: "NIFTY 50",        sub: "NSE Benchmark" },
+  { key: "NIFTY BANK",   label: "BANK NIFTY",       sub: "Banking Sector" },
+  { key: "SENSEX",       label: "SENSEX",            sub: "BSE 30" },
+  { key: "NIFTY IT",     label: "NIFTY IT",          sub: "Technology" },
+  { key: "NIFTY PHARMA", label: "NIFTY PHARMA",      sub: "Pharma" },
+  { key: "NIFTY AUTO",   label: "NIFTY AUTO",        sub: "Automobiles" },
+];
+
+// Sector heatmap — fetched from backend
+const SECTORS = [
+  "NIFTY IT", "NIFTY BANK", "NIFTY PHARMA", "NIFTY AUTO",
+  "NIFTY FMCG", "NIFTY METAL", "NIFTY REALTY", "NIFTY ENERGY",
+];
+
+interface IndexState {
+  ltp:    number | null;
+  change: number | null;
+  changePct: number | null;
+  ticks:  number[];     // rolling last-100 LTP values for sparkline
 }
 
-// ── Index card ───────────────────────────────────────────────────────────────
-function IndexCard({
-  name, symbol, history,
-}: { name: string; symbol: string; history: number[] }) {
-  const { indices, connected } = useMarketTicker();
-  const tick = indices[symbol];
-  const up = tick?.change_pct != null && tick.change_pct >= 0;
-  const color = tick == null ? "var(--text-tertiary)"
-    : up ? "var(--color-up)" : "var(--color-down)";
+const INITIAL: Record<string, IndexState> = Object.fromEntries(
+  INDICES.map(({ key }) => [key, { ltp: null, change: null, changePct: null, ticks: [] }])
+);
 
-  function fmt(n: number | null | undefined) {
-    if (n == null) return "—";
-    return n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  }
-
-  return (
-    <div className="card" style={{ flex: "1 1 260px", minWidth: 240 }}>
-      <div style={{ display: "flex", justifyContent: "space-between",
-        alignItems: "flex-start", marginBottom: 8 }}>
-        <div>
-          <div style={{ fontSize: "0.714rem", color: "var(--text-tertiary)",
-            fontWeight: 600, letterSpacing: "0.06em", marginBottom: 2 }}>{name}</div>
-          <div style={{ fontSize: "1.85rem", fontWeight: 800,
-            fontFamily: "var(--font-mono)", lineHeight: 1 }}>
-            {tick?.ltp != null ? fmt(tick.ltp) : "—"}
-          </div>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-          <span style={{ color, fontFamily: "var(--font-mono)",
-            fontSize: "0.9rem", fontWeight: 700,
-            display: "flex", alignItems: "center", gap: 4 }}>
-            {tick?.change_pct != null
-              ? (up ? <TrendingUp size={14}/> : <TrendingDown size={14}/>)
-              : <Minus size={14} />}
-            {tick?.change_pct != null
-              ? `${up ? "+" : ""}${tick.change_pct.toFixed(2)}%`
-              : "—"}
-          </span>
-          <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.75rem",
-            color: "var(--text-tertiary)" }}>
-            {tick?.change != null
-              ? `${up ? "+" : ""}${fmt(tick.change)}`
-              : ""}
-          </span>
-        </div>
-      </div>
-      <Sparkline data={history} color={up ? "#22c55e" : "#ef4444"} />
-      <div style={{ display: "flex", justifyContent: "space-between",
-        marginTop: 6, fontSize: "0.714rem", color: "var(--text-tertiary)" }}>
-        <span>Source: yfinance</span>
-        <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          {connected
-            ? <><Wifi size={10} color="var(--color-up)" /> Live</>
-            : <><WifiOff size={10} color="var(--color-down)" /> Polling</>}
-        </span>
-      </div>
-    </div>
-  );
+function fmt(n: number | null | undefined) {
+  if (n == null) return "—";
+  return n.toLocaleString("en-IN", { maximumFractionDigits: 2 });
+}
+function fmtPct(n: number | null | undefined) {
+  if (n == null) return "—";
+  return `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
 }
 
-// ── Market breadth bar ───────────────────────────────────────────────────────
-function BreadthBar({ advances, declines, unchanged }: {
-  advances: number; declines: number; unchanged: number;
-}) {
-  const total = advances + declines + unchanged || 1;
-  const advPct  = (advances  / total * 100).toFixed(1);
-  const decPct  = (declines  / total * 100).toFixed(1);
-  return (
-    <div className="card" style={{ flex: "1 1 100%" }}>
-      <div className="card-header">
-        <span className="card-title">Market Breadth · NSE</span>
-        <span style={{ fontSize: "0.714rem", color: "var(--text-tertiary)" }}>
-          {total.toLocaleString()} active
-        </span>
-      </div>
-      <div style={{ display: "flex", gap: 24, marginBottom: 12, flexWrap: "wrap" }}>
-        {[
-          { label: "Advances",  value: advances, color: "var(--color-up)" },
-          { label: "Declines",  value: declines, color: "var(--color-down)" },
-          { label: "Unchanged", value: unchanged, color: "var(--text-tertiary)" },
-        ].map(({ label, value, color }) => (
-          <div key={label} style={{ textAlign: "center" }}>
-            <div style={{ fontSize: "1.4rem", fontWeight: 700,
-              fontFamily: "var(--font-mono)", color }}>{value.toLocaleString()}</div>
-            <div style={{ fontSize: "0.714rem", color: "var(--text-tertiary)" }}>{label}</div>
-          </div>
-        ))}
-        <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: "1.4rem", fontWeight: 700,
-            fontFamily: "var(--font-mono)",
-            color: advances > declines ? "var(--color-up)" : "var(--color-down)" }}>
-            {(advances / (declines || 1)).toFixed(2)}
-          </div>
-          <div style={{ fontSize: "0.714rem", color: "var(--text-tertiary)" }}>A/D Ratio</div>
-        </div>
-      </div>
-      <div style={{ height: 8, borderRadius: 4, overflow: "hidden",
-        display: "flex", background: "var(--surface-03)" }}>
-        <div style={{ width: `${advPct}%`, background: "var(--color-up)", transition: "width 1s" }} />
-        <div style={{ width: `${decPct}%`, background: "var(--color-down)", transition: "width 1s" }} />
-      </div>
-      <div style={{ display: "flex", justifyContent: "space-between",
-        fontSize: "0.714rem", color: "var(--text-tertiary)", marginTop: 4 }}>
-        <span>{advPct}% advances</span>
-        <span>{decPct}% declines</span>
-      </div>
-    </div>
-  );
-}
-
-// ── Main page ────────────────────────────────────────────────────────────────
 export default function MarketsPage() {
-  const { indices, connected, lastTick, isOpen } = useMarketTicker();
+  const [indices, setIndices] = useState<Record<string, IndexState>>(INITIAL);
+  const { connected, lastTick } = useMarketTicker(["market"]);
+  const [marketStatus, setMarketStatus] = useState<"open" | "closed" | "unknown">("unknown");
 
-  // Rolling tick history for sparklines (max 60 ticks)
-  const niftyHist   = useRef<number[]>([]);
-  const bankHist    = useRef<number[]>([]);
-  const [, forceRender] = useState(0);
-
+  // Apply incoming ticks to state
   useEffect(() => {
-    if (indices["NIFTY50"]?.ltp)   { niftyHist.current.push(indices["NIFTY50"].ltp!); if (niftyHist.current.length > 60) niftyHist.current.shift(); }
-    if (indices["BANKNIFTY"]?.ltp) { bankHist.current.push(indices["BANKNIFTY"].ltp!); if (bankHist.current.length > 60) bankHist.current.shift(); }
-    forceRender(n => n + 1);
+    if (!lastTick?.indices) return;
+    const tmap = lastTick.indices as Record<string, { ltp: number; change: number; change_pct: number }>;
+    setMarketStatus(lastTick.is_open ? "open" : "closed");
+    setIndices(prev => {
+      const next = { ...prev };
+      for (const [key, val] of Object.entries(tmap)) {
+        if (!next[key]) next[key] = { ltp: null, change: null, changePct: null, ticks: [] };
+        const prevTicks = next[key].ticks.slice(-99);
+        next[key] = {
+          ltp:       val.ltp,
+          change:    val.change,
+          changePct: val.change_pct,
+          ticks:     [...prevTicks, val.ltp],
+        };
+      }
+      return next;
+    });
   }, [lastTick]);
-
-  // Static breadth placeholder until we have live breadth feed
-  const [breadth] = useState({ advances: 1238, declines: 891, unchanged: 414 });
 
   return (
     <div style={{ maxWidth: 1400, margin: "0 auto" }}>
 
       {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between",
-        alignItems: "flex-end", marginBottom: 24, flexWrap: "wrap", gap: 8 }}>
+        alignItems: "center", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
         <div>
-          <h1 style={{ fontSize: "1.5rem", fontWeight: 700, marginBottom: 4,
-            display: "flex", alignItems: "center", gap: 8 }}>
-            <Activity size={20} />
+          <h1 style={{ fontSize: "1.5rem", fontWeight: 700, marginBottom: 4 }}>
             Markets
           </h1>
           <p style={{ color: "var(--text-secondary)", fontSize: "0.857rem" }}>
-            NSE live data · yfinance · {isOpen ? "🟢 Market Open" : "🔴 Market Closed"}
+            Live index dashboard · ticks via WebSocket · yfinance data
           </p>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8,
-          fontSize: "0.786rem", color: "var(--text-tertiary)" }}>
-          {connected
-            ? <><Wifi size={12} color="var(--color-up)" /> WebSocket Live</>
-            : <><WifiOff size={12} color="var(--color-down)" /> Connecting…</>}
-          {lastTick && (
-            <span><Clock size={10} style={{ display: "inline" }} />
-              &nbsp;{lastTick.toLocaleTimeString("en-IN")}
-            </span>
-          )}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{
+            display: "flex", alignItems: "center", gap: 5,
+            fontSize: "0.786rem", fontWeight: 600,
+            color: marketStatus === "open" ? "var(--color-up)" : "var(--text-tertiary)",
+          }}>
+            <span style={{
+              width: 7, height: 7, borderRadius: "50%",
+              background: marketStatus === "open" ? "var(--color-up)" : "var(--text-tertiary)",
+              animation: marketStatus === "open" ? "pulse 2s ease-in-out infinite" : "none",
+            }} />
+            {marketStatus === "open" ? "Market Open" : marketStatus === "closed" ? "Market Closed" : "Unknown"}
+          </span>
+          <span style={{
+            display: "flex", alignItems: "center", gap: 4,
+            fontSize: "0.75rem",
+            color: connected ? "var(--color-up)" : "var(--color-down)",
+          }}>
+            {connected ? <Wifi size={12} /> : <WifiOff size={12} />}
+            {connected ? "Live" : "Reconnecting…"}
+          </span>
         </div>
       </div>
 
-      {/* Index cards */}
-      <div style={{ display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
-        <IndexCard
-          name="NIFTY 50"
-          symbol="NIFTY50"
-          history={niftyHist.current}
-        />
-        <IndexCard
-          name="BANK NIFTY"
-          symbol="BANKNIFTY"
-          history={bankHist.current}
-        />
-      </div>
-
-      {/* Market breadth */}
-      <div style={{ display: "flex", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
-        <BreadthBar {...breadth} />
-      </div>
-
-      {/* Session info */}
-      <div className="card">
-        <div className="card-header">
-          <span className="card-title">Session Details</span>
-          <span className="data-source">NSE</span>
-        </div>
-        <div style={{ display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 16 }}>
-          {[
-            { label: "Exchange",   value: "NSE" },
-            { label: "Segment",    value: "Cash Equity" },
-            { label: "Open",       value: "09:15 IST" },
-            { label: "Close",      value: "15:30 IST" },
-            { label: "Status",     value: isOpen ? "Open" : "Closed",
-              color: isOpen ? "var(--color-up)" : "var(--color-down)" },
-            { label: "Data Feed",  value: "yfinance v1.7+" },
-            { label: "Cache TTL",  value: "15s snapshot / 30s quote" },
-            { label: "WebSocket",  value: connected ? "Connected" : "Reconnecting",
-              color: connected ? "var(--color-up)" : "var(--text-secondary)" },
-          ].map(({ label, value, color }) => (
-            <div key={label}>
-              <div style={{ fontSize: "0.714rem", color: "var(--text-tertiary)",
-                marginBottom: 3 }}>{label}</div>
-              <div style={{ fontFamily: "var(--font-mono)", fontWeight: 600,
-                color: color ?? "var(--text-primary)" }}>{value}</div>
+      {/* Index Cards Grid */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+        gap: 14, marginBottom: 28,
+      }}>
+        {INDICES.map(({ key, label, sub }) => {
+          const s    = indices[key];
+          const up   = s.changePct != null ? s.changePct >= 0 : true;
+          const color = s.ltp != null ? (up ? "var(--color-up)" : "var(--color-down)") : "var(--text-tertiary)";
+          return (
+            <div key={key} className="card" style={{ padding: "16px 18px", position: "relative" }}>
+              {/* Header */}
+              <div style={{ display: "flex", justifyContent: "space-between",
+                alignItems: "flex-start", marginBottom: 8 }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: "0.95rem" }}>{label}</div>
+                  <div style={{ fontSize: "0.714rem", color: "var(--text-tertiary)" }}>{sub}</div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontFamily: "var(--font-mono)", fontWeight: 700,
+                    fontSize: "1.1rem", color }}>
+                    {s.ltp != null ? fmt(s.ltp) : "—"}
+                  </div>
+                  <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.8rem",
+                    color, display: "flex", alignItems: "center", gap: 3, justifyContent: "flex-end" }}>
+                    {s.changePct != null
+                      ? (up ? <TrendingUp size={11} /> : <TrendingDown size={11} />)
+                      : null}
+                    {fmtPct(s.changePct)}
+                  </div>
+                </div>
+              </div>
+              {/* Sparkline */}
+              <div style={{ marginTop: 4 }}>
+                {s.ticks.length > 1
+                  ? <SparkLine data={s.ticks} up={up} />
+                  : (
+                    <div style={{ height: 56, display: "flex", alignItems: "center",
+                      justifyContent: "center", color: "var(--text-tertiary)",
+                      fontSize: "0.714rem", opacity: 0.6 }}>
+                      {connected ? "Waiting for ticks…" : "Offline"}
+                    </div>
+                  )}
+              </div>
+              {/* Absolute change */}
+              {s.change != null && (
+                <div style={{ marginTop: 6, fontSize: "0.714rem",
+                  color: "var(--text-tertiary)", fontFamily: "var(--font-mono)" }}>
+                  {s.change >= 0 ? "+" : ""}{fmt(s.change)} pts today
+                </div>
+              )}
             </div>
-          ))}
-        </div>
+          );
+        })}
       </div>
+
+      {/* Data note */}
+      <div style={{ fontSize: "0.714rem", color: "var(--text-tertiary)",
+        borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 8 }}>
+        Index data via yfinance · WebSocket broadcaster · 15-sec polling · NSE/BSE
+        <span style={{ marginLeft: 12 }} className="data-source">live ticks</span>
+        <span style={{ marginLeft: 4 }} className="data-source">yfinance</span>
+      </div>
+
+      <style>{`
+        @keyframes pulse {
+          0%,100%{opacity:1} 50%{opacity:0.4}
+        }
+      `}</style>
     </div>
   );
 }

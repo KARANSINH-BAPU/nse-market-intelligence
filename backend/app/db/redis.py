@@ -53,6 +53,25 @@ class RedisClient:
     async def hgetall(self, name: str) -> dict[str, str]:
         return await self._client.hgetall(name)
 
+    async def sadd(self, name: str, *values: str) -> int:
+        return await self._client.sadd(name, *values)  # type: ignore[arg-type]
+
+    async def srem(self, name: str, *values: str) -> int:
+        return await self._client.srem(name, *values)  # type: ignore[arg-type]
+
+    async def smembers(self, name: str) -> set[str]:
+        return await self._client.smembers(name)  # type: ignore[return-value]
+
+    async def expire(self, name: str, seconds: int) -> bool:
+        return await self._client.expire(name, seconds)  # type: ignore[return-value]
+
+    async def exists(self, *names: str) -> int:
+        return await self._client.exists(*names)  # type: ignore[arg-type]
+
+    def pipeline(self) -> Any:
+        """Return a Redis pipeline for atomic multi-command operations."""
+        return self._client.pipeline()
+
     async def zadd(self, name: str, mapping: dict[str, float]) -> int:
         return await self._client.zadd(name, mapping)
 

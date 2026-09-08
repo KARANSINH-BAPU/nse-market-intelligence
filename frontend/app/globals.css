@@ -321,6 +321,12 @@ code, pre, .mono {
   animation: pulse-badge 2s ease-in-out infinite;
 }
 
+.nav-badge.new-badge {
+  background: rgba(99, 102, 241, 0.18);
+  color: var(--accent-bright);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+}
+
 @keyframes pulse-badge {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }
