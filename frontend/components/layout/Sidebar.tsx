@@ -44,6 +44,7 @@ const NAV_SECTIONS: NavSection[] = [
   {
     title: "Data",
     items: [
+      { label: "Instruments",    href: "/instruments", icon: BarChart2, badge: "2583" },
       { label: "News",           href: "/news",      icon: Newspaper },
       { label: "F&O",            href: "/fno",       icon: BarChart2 },
     ],
