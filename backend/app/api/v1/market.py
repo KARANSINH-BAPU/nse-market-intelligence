@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
 from app.models.market_session import MarketSession
-from app.services.market_data import fetch_index_quotes, fetch_ohlcv, fetch_quote
+from app.services.quote_cache import cached_ohlcv, cached_quote, cached_snapshot
 
 log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -68,21 +68,22 @@ async def market_snapshot() -> dict[str, Any]:
     Live quotes from yfinance. Fields are None when unavailable.
     NEVER returns fabricated values.
     """
-    indices = await fetch_index_quotes()
+    cached = await cached_snapshot()
     return {
         "status": "ok",
         "phase": _market_phase(),
         "is_open": _is_nse_open(),
-        "indices": indices,
-        "source": "yfinance",
-        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "indices": cached["indices"],
+        "source": cached.get("source", "yfinance"),
+        "cache": cached.get("cache", "UNKNOWN"),
+        "fetched_at": cached.get("fetched_at", datetime.now(timezone.utc).isoformat()),
     }
 
 
 # ── /quote/{symbol} ───────────────────────────────────────────────
 @router.get("/quote/{symbol}", summary="Live quote for an NSE equity")
 async def get_quote(symbol: str) -> dict[str, Any]:
-    data = await fetch_quote(symbol.upper())
+    data = await cached_quote(symbol.upper())
     if data is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -99,7 +100,7 @@ async def get_ohlcv(
     interval: str = Query("5m",  description="1m | 5m | 15m | 30m | 1h | 1d"),
 ) -> dict[str, Any]:
     """Real OHLCV from yfinance. Returns empty bars[] when data unavailable."""
-    bars = await fetch_ohlcv(symbol.upper(), period=period, interval=interval)
+    bars = await cached_ohlcv(symbol.upper(), period=period, interval=interval)
     return {
         "symbol": symbol.upper(),
         "period": period,
