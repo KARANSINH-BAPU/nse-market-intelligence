@@ -85,7 +85,7 @@ export default function ModelLabPage() {
   const analyse = useCallback(async () => {
     setLoading(true); setError(""); setPatterns([]);
     try {
-      const r = await fetch(`${API}/api/v1/features/${symbol.toUpperCase().trim()}?include_signals=true`);
+      const r = await fetch(`${API}/api/v1/ohlcv/${symbol.toUpperCase().trim()}?period=1y`);
       if (!r.ok) { setError(`No data for ${symbol}`); return; }
       const d = await r.json();
       const b: Bar[] = (d.bars ?? []).map((b: any) => ({

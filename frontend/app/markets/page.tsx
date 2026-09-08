@@ -38,14 +38,17 @@ const SparkLine = dynamic(
 );
 
 const INDICES = [
-  { key: "NIFTY 50",     label: "NIFTY 50",     sub: "NSE Benchmark",    size: "large" },
-  { key: "NIFTY BANK",   label: "BANK NIFTY",   sub: "Banking Sector",   size: "large" },
-  { key: "SENSEX",       label: "SENSEX",        sub: "BSE 30",           size: "large" },
-  { key: "NIFTY IT",     label: "NIFTY IT",      sub: "Technology",       size: "small" },
-  { key: "NIFTY PHARMA", label: "NIFTY PHARMA",  sub: "Pharma",           size: "small" },
-  { key: "NIFTY AUTO",   label: "NIFTY AUTO",    sub: "Automobiles",      size: "small" },
-  { key: "NIFTY FMCG",   label: "NIFTY FMCG",   sub: "FMCG",             size: "small" },
-  { key: "NIFTY METAL",  label: "NIFTY METAL",   sub: "Metals",           size: "small" },
+  { key: "NIFTY 50",       label: "NIFTY 50",       sub: "NSE Benchmark",    size: "large" },
+  { key: "BANK NIFTY",     label: "BANK NIFTY",     sub: "Banking Sector",   size: "large" },
+  { key: "SENSEX",         label: "SENSEX",          sub: "BSE 30",           size: "large" },
+  { key: "NIFTY IT",       label: "NIFTY IT",        sub: "Technology",       size: "small" },
+  { key: "NIFTY PHARMA",   label: "NIFTY PHARMA",    sub: "Pharma",           size: "small" },
+  { key: "NIFTY AUTO",     label: "NIFTY AUTO",      sub: "Automobiles",      size: "small" },
+  { key: "NIFTY FMCG",     label: "NIFTY FMCG",      sub: "FMCG",             size: "small" },
+  { key: "NIFTY METAL",    label: "NIFTY METAL",      sub: "Metals",           size: "small" },
+  { key: "NIFTY ENERGY",   label: "NIFTY ENERGY",     sub: "Energy",           size: "small" },
+  { key: "NIFTY INFRA",    label: "NIFTY INFRA",      sub: "Infrastructure",   size: "small" },
+  { key: "NIFTY MIDCAP",   label: "NIFTY MIDCAP",     sub: "Mid Cap 50",       size: "small" },
 ];
 
 interface IState { ltp: number|null; change: number|null; changePct: number|null; ticks: number[]; }
@@ -75,22 +78,29 @@ export default function MarketsPage() {
       if (d.indices) {
         // Map backend keys → display keys
         const KEY_MAP: Record<string, string> = {
-          NIFTY50:    "NIFTY 50",
-          BANKNIFTY:  "NIFTY BANK",
-          SENSEX:     "SENSEX",
-          NIFTYIT:    "NIFTY IT",
-          NIFTYPHARMA:"NIFTY PHARMA",
-          NIFTYAUTO:  "NIFTY AUTO",
-          NIFTYFMCG:  "NIFTY FMCG",
-          NIFTYMETAL: "NIFTY METAL",
-          // also accept display-key form unchanged
+          NIFTY50:     "NIFTY 50",
+          BANKNIFTY:   "BANK NIFTY",
+          SENSEX:      "SENSEX",
+          NIFTYIT:     "NIFTY IT",
+          NIFTYPHARMA: "NIFTY PHARMA",
+          NIFTYAUTO:   "NIFTY AUTO",
+          NIFTYFMCG:   "NIFTY FMCG",
+          NIFTYMETAL:  "NIFTY METAL",
+          NIFTYENERGY: "NIFTY ENERGY",
+          NIFTYINFRA:  "NIFTY INFRA",
+          NIFTYMIDCAP: "NIFTY MIDCAP",
+          // also accept already-mapped display keys
           "NIFTY 50":    "NIFTY 50",
-          "NIFTY BANK":  "NIFTY BANK",
+          "BANK NIFTY":  "BANK NIFTY",
+          "NIFTY BANK":  "BANK NIFTY",
           "NIFTY IT":    "NIFTY IT",
           "NIFTY PHARMA":"NIFTY PHARMA",
           "NIFTY AUTO":  "NIFTY AUTO",
           "NIFTY FMCG":  "NIFTY FMCG",
           "NIFTY METAL": "NIFTY METAL",
+          "NIFTY ENERGY":"NIFTY ENERGY",
+          "NIFTY INFRA": "NIFTY INFRA",
+          "NIFTY MIDCAP":"NIFTY MIDCAP",
         };
         setIndices(prev => {
           const next = { ...prev };

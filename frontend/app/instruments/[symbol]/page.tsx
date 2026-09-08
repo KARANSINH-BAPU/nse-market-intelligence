@@ -4,16 +4,17 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { api, IndexQuote, OHLCVResponse } from "@/lib/api";
 import {
   TrendingUp, TrendingDown, ArrowLeft, RefreshCw,
-  BarChart2, Activity, Database, ExternalLink,
+  BarChart2, Activity, ExternalLink, Clock,
 } from "lucide-react";
 
-// Lazy-load recharts chart (reduces initial bundle)
+const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+// Lazy-load recharts chart
 const TechnicalChart = dynamic(
   () => import("@/components/charts/TechnicalChart"),
-  { ssr: false, loading: () => <div style={{ height: 480, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-tertiary)" }}>Loading chart…</div> }
+  { ssr: false, loading: () => <div style={{ height: 400, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-tertiary)" }}>Loading chart…</div> }
 );
 
 function fmt(n: number | null | undefined, d = 2) {
@@ -26,50 +27,91 @@ function fmtPct(n: number | null | undefined) {
 }
 function fmtVol(n: number | null | undefined) {
   if (!n) return "—";
-  if (n >= 1e7) return `${(n / 1e7).toFixed(2)} Cr`;
-  if (n >= 1e5) return `${(n / 1e5).toFixed(2)} L`;
+  if (n >= 1e7) return `${(n / 1e7).toFixed(2)}Cr`;
+  if (n >= 1e5) return `${(n / 1e5).toFixed(2)}L`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
   return n.toLocaleString("en-IN");
 }
+
+interface Bar {
+  trade_date: string; open: number; high: number; low: number;
+  close: number; volume: number; change_pct: number;
+  rsi: number | null; macd: number | null; sma20: number | null; ema12: number | null;
+}
+interface OhlcvData {
+  symbol: string; period: string; count: number; bars: Bar[];
+  close: number; change_pct: number; rsi: number|null; macd: number|null; sma20: number|null;
+}
+
+const PERIODS = [
+  { key: "1m", label: "1M" },
+  { key: "3m", label: "3M" },
+  { key: "6m", label: "6M" },
+  { key: "1y", label: "1Y" },
+];
 
 export default function InstrumentDetailPage() {
   const { symbol } = useParams() as { symbol: string };
   const SYM = symbol?.toUpperCase();
 
-  const [quote, setQuote]     = useState<IndexQuote | null>(null);
-  const [ohlcv, setOhlcv]     = useState<OHLCVResponse | null>(null);
-  const [features, setFeatures] = useState<any[]>([]);
-  const [period, setPeriod]   = useState("1mo");
+  const [data,    setData]    = useState<OhlcvData | null>(null);
+  const [quote,   setQuote]   = useState<any>(null);
+  const [period,  setPeriod]  = useState("1y");
   const [loading, setLoading] = useState(false);
-  const [lastAt, setLastAt]   = useState<Date | null>(null);
+  const [lastAt,  setLastAt]  = useState<Date | null>(null);
+  const [tab,     setTab]     = useState<"chart"|"table">("chart");
 
   const refresh = useCallback(async () => {
     if (!SYM) return;
     setLoading(true);
     try {
-      const [q, o] = await Promise.all([
-        api.quote(SYM).catch(() => null),
-        api.ohlcv(SYM, period, "1d").catch(() => null),
+      // Fetch OHLCV history from our DB
+      const [ohlcvRes, quoteRes] = await Promise.allSettled([
+        fetch(`${API}/api/v1/ohlcv/${SYM}?period=${period}`).then(r => r.ok ? r.json() : null),
+        fetch(`${API}/api/v1/market/search?q=${SYM}&limit=1`).then(r => r.ok ? r.json() : null),
       ]);
-      setQuote(q);
-      setOhlcv(o);
+      if (ohlcvRes.status === "fulfilled" && ohlcvRes.value) setData(ohlcvRes.value);
+      if (quoteRes.status === "fulfilled" && quoteRes.value?.results?.length) {
+        setQuote(quoteRes.value.results[0]);
+      }
       setLastAt(new Date());
-      // Fetch features (252 bars) for chart
-      try {
-        const f = await fetch(`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/api/v1/features/${SYM}?lookback=252`);
-        if (f.ok) { const fd = await f.json(); setFeatures(fd.features ?? []); }
-      } catch { /* features are optional */ }
     } finally { setLoading(false); }
   }, [SYM, period]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  const up = quote?.change != null && quote.change >= 0;
+  // Auto-refresh price every 30s
+  useEffect(() => {
+    const id = setInterval(async () => {
+      if (!SYM) return;
+      try {
+        const r = await fetch(`${API}/api/v1/market/search?q=${SYM}&limit=1`);
+        if (r.ok) {
+          const d = await r.json();
+          if (d.results?.length) setQuote(d.results[0]);
+        }
+      } catch {}
+    }, 30000);
+    return () => clearInterval(id);
+  }, [SYM]);
+
+  const latest = data?.bars[data.bars.length - 1];
+  const ltp    = quote?.close ?? latest?.close;
+  const change = quote?.change_pct ?? latest?.change_pct;
+  const up     = (change ?? 0) >= 0;
+
+  // For TechnicalChart — map bar → features format
+  const chartFeatures = (data?.bars ?? []).map(b => ({
+    trade_date: b.trade_date,
+    close: b.close, open: b.open, high: b.high, low: b.low, volume: b.volume,
+    rsi_14: b.rsi, macd_line: b.macd, sma_20: b.sma20, ema_12: b.ema12,
+  }));
 
   return (
     <div style={{ maxWidth: 1200, margin: "0 auto" }}>
 
       {/* Breadcrumb */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20,
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16,
         fontSize: "0.857rem", color: "var(--text-secondary)" }}>
         <Link href="/instruments" style={{ color: "var(--text-secondary)",
           textDecoration: "none", display: "flex", alignItems: "center", gap: 4 }}>
@@ -84,157 +126,199 @@ export default function InstrumentDetailPage() {
         <div style={{ display: "flex", justifyContent: "space-between",
           alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
           <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 4 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
               <h1 style={{ fontSize: "1.5rem", fontWeight: 800,
-                fontFamily: "var(--font-mono)" }}>{SYM}</h1>
+                fontFamily: "var(--font-mono)", margin: 0 }}>{SYM}</h1>
               <span className="data-source live">NSE · EQ</span>
               <span className="data-source">yfinance</span>
+              {quote?.name && (
+                <span style={{ fontSize: "0.857rem", color: "var(--text-tertiary)",
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 300 }}>
+                  {quote.name}
+                </span>
+              )}
             </div>
             <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
               <span style={{ fontSize: "2.2rem", fontWeight: 700,
-                fontFamily: "var(--font-mono)", lineHeight: 1 }}>
-                {quote?.ltp ? `₹${fmt(quote.ltp)}` : "—"}
+                fontFamily: "var(--font-mono)", lineHeight: 1,
+                color: up ? "var(--color-up)" : "var(--color-down)" }}>
+                {ltp ? `₹${fmt(ltp)}` : "—"}
               </span>
-              {quote?.change != null && (
-                <span style={{ fontSize: "1rem", color: up ? "var(--color-up)" : "var(--color-down)",
-                  fontFamily: "var(--font-mono)" }}>
+              {change != null && (
+                <span style={{ fontSize: "1rem", fontFamily: "var(--font-mono)",
+                  color: up ? "var(--color-up)" : "var(--color-down)" }}>
                   {up ? <TrendingUp size={14} style={{ display: "inline", marginRight: 4 }} />
                        : <TrendingDown size={14} style={{ display: "inline", marginRight: 4 }} />}
-                  {fmt(quote.change)} ({fmtPct(quote.change_pct)})
+                  {fmtPct(change)}
                 </span>
               )}
             </div>
           </div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
-            <button id="refresh-detail" onClick={refresh} disabled={loading}
-              style={{ display: "flex", alignItems: "center", gap: 6,
-                background: "var(--surface-04)", border: "1px solid var(--border)",
-                color: "var(--text-secondary)", borderRadius: "var(--border-radius)",
-                padding: "6px 12px", cursor: "pointer", fontSize: "0.786rem" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+            <button onClick={refresh} disabled={loading}
+              style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--surface-03)",
+                border: "1px solid var(--border)", color: "var(--text-secondary)",
+                borderRadius: "var(--border-radius)", padding: "6px 12px",
+                cursor: "pointer", fontSize: "0.786rem" }}>
               <RefreshCw size={12} style={{ animation: loading ? "spin 1s linear infinite" : "none" }} />
-              {lastAt ? lastAt.toLocaleTimeString("en-IN") : "Refresh"}
+              {lastAt ? lastAt.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "Refresh"}
             </button>
-            {quote?.ltp && (
-              <span style={{ fontSize: "0.714rem", color: "var(--text-tertiary)" }}>
-                Auto-refresh · real-time data
-              </span>
-            )}
+            {lastAt && <span style={{ fontSize: "0.643rem", color: "var(--text-tertiary)" }}>Auto-refresh · real-time data</span>}
           </div>
         </div>
 
         {/* Stats row */}
-        {quote && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
-            gap: 12, marginTop: 20, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
-            {[
-              { label: "Prev Close", value: fmt(quote.prev_close) },
-              { label: "Open",       value: (quote as any).open ? `₹${fmt((quote as any).open)}` : "—" },
-              { label: "Day High",   value: (quote as any).day_high ? `₹${fmt((quote as any).day_high)}` : "—" },
-              { label: "Day Low",    value: (quote as any).day_low ? `₹${fmt((quote as any).day_low)}` : "—" },
-              { label: "Volume",     value: fmtVol((quote as any).volume) },
-            ].map(({ label, value }) => (
-              <div key={label}>
-                <div style={{ fontSize: "0.714rem", color: "var(--text-tertiary)", marginBottom: 3 }}>{label}</div>
-                <div style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>{value}</div>
-              </div>
-            ))}
-          </div>
-        )}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px,1fr))",
+          gap: 10, marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
+          {[
+            { label: "Prev Close", value: latest ? `₹${fmt(latest.open)}` : "—" },
+            { label: "Open",       value: latest ? `₹${fmt(latest.open)}` : "—" },
+            { label: "Day High",   value: latest ? `₹${fmt(latest.high)}` : "—" },
+            { label: "Day Low",    value: latest ? `₹${fmt(latest.low)}` : "—" },
+            { label: "Volume",     value: latest ? fmtVol(latest.volume) : "—" },
+            { label: "RSI(14)",    value: latest?.rsi != null ? latest.rsi.toFixed(1) : "—" },
+            { label: "MACD",       value: latest?.macd != null ? latest.macd.toFixed(3) : "—" },
+            { label: "SMA20",      value: latest?.sma20 != null ? `₹${fmt(latest.sma20)}` : "—" },
+          ].map(({ label, value }) => (
+            <div key={label}>
+              <div style={{ fontSize: "0.714rem", color: "var(--text-tertiary)", marginBottom: 2 }}>{label}</div>
+              <div style={{ fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: "0.857rem" }}>{value}</div>
+            </div>
+          ))}
+        </div>
       </div>
+
+      {/* Period selector + Tabs */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+        marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          {(["chart","table"] as const).map(t => (
+            <button key={t} onClick={() => setTab(t)}
+              style={{ padding: "5px 14px", borderRadius: "var(--border-radius)", fontWeight: 600,
+                border: "none", cursor: "pointer", fontSize: "0.786rem",
+                background: tab === t ? "var(--accent)" : "var(--surface-03)",
+                color: tab === t ? "#fff" : "var(--text-secondary)" }}>
+              {t === "chart" ? "📈 Chart" : "📋 OHLCV Table"}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {PERIODS.map(({ key, label }) => (
+            <button key={key} onClick={() => setPeriod(key)}
+              style={{ padding: "4px 10px", borderRadius: "var(--border-radius)",
+                border: `1px solid ${period === key ? "var(--accent)" : "var(--border)"}`,
+                background: period === key ? "rgba(99,102,241,0.15)" : "var(--surface-03)",
+                color: period === key ? "var(--accent-bright)" : "var(--text-secondary)",
+                cursor: "pointer", fontSize: "0.786rem", fontWeight: period === key ? 700 : 500 }}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Chart */}
+      {tab === "chart" && (
+        <div className="card">
+          <div style={{ marginBottom: 12, display: "flex", alignItems: "center",
+            justifyContent: "space-between" }}>
+            <span style={{ fontWeight: 700, fontSize: "0.9rem", display: "flex",
+              alignItems: "center", gap: 6 }}>
+              <Activity size={14} style={{ color: "var(--accent-bright)" }} />
+              Technical Indicators · {data?.count ?? 0} bars
+            </span>
+            <span style={{ fontSize: "0.714rem", color: "var(--text-tertiary)" }}>
+              RSI(14) · MACD(12,26,9) · SMA(20) · EMA(12) · ohlcv_daily
+            </span>
+          </div>
+          {loading && !chartFeatures.length ? (
+            <div style={{ height: 300, display: "flex", alignItems: "center",
+              justifyContent: "center", color: "var(--text-tertiary)" }}>
+              Loading OHLCV data for {SYM}…
+            </div>
+          ) : chartFeatures.length ? (
+            <TechnicalChart data={chartFeatures} symbol={SYM} height={460} />
+          ) : (
+            <div style={{ height: 200, display: "flex", alignItems: "center",
+              justifyContent: "center", flexDirection: "column", gap: 8,
+              color: "var(--text-tertiary)" }}>
+              <BarChart2 size={32} style={{ opacity: 0.3 }} />
+              <div>No OHLCV data in database for {SYM}</div>
+              <div style={{ fontSize: "0.714rem" }}>
+                Run: <code style={{ background: "var(--surface-03)", padding: "2px 6px",
+                  borderRadius: 3, fontFamily: "var(--font-mono)" }}>
+                  python scripts/ingest_ohlcv.py --symbol {SYM} --period 1y
+                </code>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* OHLCV Table */}
-      <div className="card">
-        <div className="card-header">
-          <span className="card-title" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <BarChart2 size={13} /> OHLCV History
-          </span>
-          <div style={{ display: "flex", gap: 6 }}>
-            {["1mo", "3mo", "6mo", "1y"].map(p => (
-              <button key={p} id={`period-${p}`}
-                onClick={() => { setPeriod(p); }}
-                style={{
-                  background: period === p ? "var(--accent-dim)" : "var(--surface-04)",
-                  border: `1px solid ${period === p ? "var(--accent)" : "var(--border)"}`,
-                  color: period === p ? "var(--accent-bright)" : "var(--text-secondary)",
-                  borderRadius: "var(--border-radius)", padding: "3px 10px",
-                  cursor: "pointer", fontSize: "0.786rem",
-                }}>{p}</button>
-            ))}
+      {tab === "table" && (
+        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+          <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)",
+            display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontWeight: 700, fontSize: "0.9rem" }}>
+              OHLCV History — {data?.count ?? 0} bars
+            </span>
+            <span style={{ fontSize: "0.714rem", color: "var(--text-tertiary)" }}>
+              Source: ohlcv_daily (PostgreSQL)
+            </span>
           </div>
-        </div>
-
-        {ohlcv && ohlcv.bars.length > 0 ? (
-          <table className="kp-table">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th className="mono">Open</th>
-                <th className="mono">High</th>
-                <th className="mono">Low</th>
-                <th className="mono">Close</th>
-                <th className="mono">Volume</th>
-                <th className="mono">Change%</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[...ohlcv.bars].reverse().map((bar, i) => {
-                const prev = ohlcv.bars[ohlcv.bars.length - 2 - i];
-                const chgPct = prev ? ((bar.close - prev.close) / prev.close * 100) : null;
-                const barUp = chgPct != null && chgPct >= 0;
-                return (
-                  <tr key={bar.timestamp}>
-                    <td style={{ fontFamily: "var(--font-mono)", color: "var(--text-secondary)" }}>
-                      {bar.timestamp.slice(0, 10)}
-                    </td>
-                    <td className="mono">{fmt(bar.open)}</td>
-                    <td className="mono" style={{ color: "var(--color-up)" }}>{fmt(bar.high)}</td>
-                    <td className="mono" style={{ color: "var(--color-down)" }}>{fmt(bar.low)}</td>
-                    <td className="mono" style={{ fontWeight: 600 }}>{fmt(bar.close)}</td>
-                    <td className="mono">{fmtVol(bar.volume)}</td>
-                    <td className="mono" style={{ color: barUp ? "var(--color-up)" : "var(--color-down)" }}>
-                      {chgPct != null ? fmtPct(chgPct) : "—"}
-                    </td>
+          {data?.bars?.length ? (
+            <div style={{ maxHeight: "60vh", overflowY: "auto" }}>
+              <table className="kp-table" style={{ margin: 0 }}>
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th style={{ textAlign: "right" }}>Open</th>
+                    <th style={{ textAlign: "right" }}>High</th>
+                    <th style={{ textAlign: "right" }}>Low</th>
+                    <th style={{ textAlign: "right" }}>Close</th>
+                    <th style={{ textAlign: "right" }}>Volume</th>
+                    <th style={{ textAlign: "right" }}>Change%</th>
+                    <th style={{ textAlign: "right" }}>RSI</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        ) : (
-          <div style={{ textAlign: "center", padding: "32px 0",
-            color: "var(--text-tertiary)", fontSize: "0.857rem" }}>
-            {loading ? "Loading OHLCV data…"
-              : "No OHLCV data. Run: python scripts/ingest_ohlcv.py --symbol " + SYM}
-          </div>
-        )}
-        {ohlcv && (
-          <div style={{ marginTop: 10, fontSize: "0.714rem", color: "var(--text-tertiary)" }}>
-            {ohlcv.count} bars · source: {ohlcv.source} · {ohlcv.interval} interval
-          </div>
-        )}
-      </div>
-
-      <style>{`
-        @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
-      `}</style>
-
-      {/* Technical Chart */}
-      <div className="card" style={{ marginTop: 16 }}>
-        <div className="card-header" style={{ marginBottom: 16 }}>
-          <span className="card-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <Activity size={14} /> Technical Indicators
-          </span>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            {features.length > 0 && (
-              <span style={{ fontSize: "0.714rem", color: "var(--text-tertiary)" }}>
-                {features.length} bars · RSI/MACD/EMA
-              </span>
-            )}
-            <span className="data-source">ohlcv_daily</span>
-          </div>
+                </thead>
+                <tbody>
+                  {[...data.bars].reverse().map((bar) => {
+                    const barUp = bar.change_pct >= 0;
+                    return (
+                      <tr key={bar.trade_date}>
+                        <td style={{ fontFamily: "var(--font-mono)", fontSize: "0.786rem",
+                          color: "var(--text-secondary)" }}>{bar.trade_date}</td>
+                        <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: "0.857rem" }}>
+                          ₹{fmt(bar.open)}</td>
+                        <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: "0.857rem",
+                          color: "var(--color-up)" }}>₹{fmt(bar.high)}</td>
+                        <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: "0.857rem",
+                          color: "var(--color-down)" }}>₹{fmt(bar.low)}</td>
+                        <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: "0.857rem",
+                          fontWeight: 700 }}>₹{fmt(bar.close)}</td>
+                        <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: "0.786rem" }}>
+                          {fmtVol(bar.volume)}</td>
+                        <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: "0.857rem",
+                          fontWeight: 700, color: barUp ? "var(--color-up)" : "var(--color-down)" }}>
+                          {fmtPct(bar.change_pct)}</td>
+                        <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: "0.786rem",
+                          color: bar.rsi != null ? (bar.rsi < 30 ? "var(--color-up)" : bar.rsi > 70 ? "var(--color-down)" : "var(--text-secondary)") : "var(--text-tertiary)" }}>
+                          {bar.rsi?.toFixed(1) ?? "—"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div style={{ padding: "60px 20px", textAlign: "center", color: "var(--text-tertiary)" }}>
+              {loading ? "Loading…" : `No OHLCV data for ${SYM}`}
+            </div>
+          )}
         </div>
-        <TechnicalChart data={features} symbol={SYM} height={500} />
-      </div>
+      )}
+
+      <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
     </div>
   );
 }

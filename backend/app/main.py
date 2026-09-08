@@ -28,6 +28,7 @@ from app.api.v1.features import router as features_router
 from app.api.v1.alerts import router as alerts_router
 from app.api.v1.signals import router as signals_router
 from app.api.v1.news import router as news_router
+from app.api.v1.ohlcv import router as ohlcv_router
 from app.websockets.manager import ws_manager
 from app.websockets.broadcaster import market_ticker_loop
 # Import all models to register with SQLAlchemy metadata
@@ -145,7 +146,8 @@ def create_app() -> FastAPI:
     app.include_router(features_router, prefix="/api/v1/features", tags=["Features"])
     app.include_router(alerts_router, prefix="/api/v1/alerts", tags=["Alerts"])
     app.include_router(signals_router, prefix="/api/v1/signals", tags=["Signals"])
-    app.include_router(news_router, prefix="/api/v1/news", tags=["News"])
+    app.include_router(news_router,    prefix="/api/v1/news",    tags=["News"])
+    app.include_router(ohlcv_router,   prefix="/api/v1/ohlcv",   tags=["OHLCV"])
 
     # ── WebSocket Endpoint ──────────────────────────────────
     # NOTE: Registered directly on app — NOT via APIRouter — so it is processed

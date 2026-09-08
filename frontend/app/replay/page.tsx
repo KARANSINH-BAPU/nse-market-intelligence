@@ -22,8 +22,8 @@ export default function ReplayPage() {
   const load = useCallback(async () => {
     setLoading(true); setError(""); setPlaying(false); setBars([]); setIdx(0);
     try {
-      const r = await fetch(`${API}/api/v1/features/${symbol.toUpperCase().trim()}?include_signals=true`);
-      if (!r.ok) { setError(`No data for ${symbol}`); return; }
+      const r = await fetch(`${API}/api/v1/ohlcv/${symbol.toUpperCase().trim()}?period=1y`);
+      if (!r.ok) { setError(`No data for ${symbol}. Try a valid NSE symbol.`); return; }
       const d = await r.json();
       const b: Bar[] = (d.bars ?? []).map((b: any) => ({
         trade_date: b.trade_date ?? b.date, open: b.open, high: b.high,

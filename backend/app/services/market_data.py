@@ -76,22 +76,75 @@ async def fetch_quote(symbol: str) -> dict[str, Any] | None:
 
 
 async def fetch_index_quotes() -> dict[str, Any]:
-    """NIFTY50 + BANKNIFTY concurrently. Unavailable on failure — never fabricates."""
-    symbols = ["NIFTY50", "BANKNIFTY"]
-    results = await asyncio.gather(*[fetch_quote(s) for s in symbols], return_exceptions=True)
+    """Fetch all major NSE/BSE indices. Never fabricates data."""
+    # symbol_key → yfinance ticker mapping
+    INDEX_MAP = {
+        "NIFTY50":    "^NSEI",
+        "BANKNIFTY":  "^NSEBANK",
+        "SENSEX":     "^BSESN",
+        "NIFTYIT":    "^CNXIT",
+        "NIFTYAUTO":  "^CNXAUTO",
+        "NIFTYPHARMA":"^CNXPHARMA",
+        "NIFTYFMCG":  "^CNXFMCG",
+        "NIFTYMETAL": "^CNXMETAL",
+        "NIFTYENERGY":"^CNXENERGY",
+        "NIFTYINFRA": "^CNXINFRA",
+        "NIFTYMIDCAP":"^CNXMID50",
+    }
+    results = await asyncio.gather(
+        *[_fetch_index_single(sym_key, yf_tick) for sym_key, yf_tick in INDEX_MAP.items()],
+        return_exceptions=True,
+    )
     quotes: dict[str, Any] = {}
-    for sym, res in zip(symbols, results):
+    for sym_key, res in zip(INDEX_MAP.keys(), results):
         if isinstance(res, dict):
-            quotes[sym] = res
+            quotes[sym_key] = res
         else:
-            quotes[sym] = {
-                "symbol": sym, "ltp": None, "change": None, "change_pct": None,
-                "quality": "unavailable",
+            quotes[sym_key] = {
+                "symbol": sym_key, "ltp": None, "change": None, "change_pct": None,
+                "quality": "unavailable", "source": "yfinance",
                 "fetched_at": datetime.now(timezone.utc).isoformat(),
-                "source": "yfinance",
                 "error": str(res) if isinstance(res, Exception) else "no_data",
             }
     return quotes
+
+
+async def _fetch_index_single(sym_key: str, yf_ticker: str) -> dict[str, Any]:
+    """Fetch one index from yfinance using its ^TICKER."""
+    import asyncio as _asyncio
+    import yfinance as yf
+    loop = _asyncio.get_event_loop()
+    try:
+        info = await _asyncio.wait_for(
+            loop.run_in_executor(None, lambda: yf.Ticker(yf_ticker).info),
+            timeout=15,
+        )
+        price = info.get("regularMarketPrice") or info.get("currentPrice")
+        prev  = info.get("regularMarketPreviousClose") or info.get("previousClose")
+        open_ = info.get("regularMarketOpen") or info.get("open")
+        high  = info.get("dayHigh") or info.get("regularMarketDayHigh")
+        low   = info.get("dayLow") or info.get("regularMarketDayLow")
+        chg   = (price - prev) if price and prev else None
+        pct   = (chg / prev * 100) if chg is not None and prev else None
+        return {
+            "symbol":     sym_key,
+            "yf_ticker":  yf_ticker,
+            "ltp":        round(price, 2) if price else None,
+            "prev_close": round(prev,  2) if prev  else None,
+            "open":       round(open_, 2) if open_ else None,
+            "day_high":   round(high,  2) if high  else None,
+            "day_low":    round(low,   2) if low   else None,
+            "change":     round(chg, 2)   if chg   else None,
+            "change_pct": round(pct, 4)   if pct   else None,
+            "volume":     info.get("regularMarketVolume", 0) or 0,
+            "currency":   "INR",
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "source":     "yfinance",
+            "quality":    "live" if price else "unavailable",
+        }
+    except Exception as e:
+        raise RuntimeError(f"{sym_key}: {e}") from e
+
 
 
 async def fetch_ohlcv(symbol: str, period: str = "1d", interval: str = "5m") -> list[dict]:

@@ -1,70 +1,131 @@
 "use client";
 /**
- * KP — News Page
- * Aggregated Indian financial news from ET, Moneycontrol, Business Standard, LiveMint.
+ * KP — News Page (Live RSS Aggregator)
+ * Economic Times, Moneycontrol, Business Standard, LiveMint
  */
-import { useCallback, useEffect, useState } from "react";
-import { Newspaper, ExternalLink, RefreshCw, Clock } from "lucide-react";
+import { useEffect, useState, useCallback } from "react";
+import { Newspaper, RefreshCw, ExternalLink, Clock, Filter, TrendingUp } from "lucide-react";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-interface NewsItem {
+interface Article {
   title: string; link: string | null; summary: string | null;
   source: string; category: string; published: string | null;
 }
 
 const SOURCE_COLORS: Record<string, string> = {
-  "Economic Times":   "#f97316",
-  "Moneycontrol":     "#3b82f6",
-  "Business Standard": "#8b5cf6",
-  "LiveMint":         "#10b981",
+  "Economic Times":   "#e31e24",
+  "Moneycontrol":     "#014580",
+  "Business Standard":"#de2b2b",
+  "LiveMint":         "#0d6efd",
 };
 
-function timeAgo(iso: string | null) {
-  if (!iso) return "";
+function timeAgo(pub: string | null): string {
+  if (!pub) return "Recently";
   try {
-    const d = new Date(iso);
-    const diff = Date.now() - d.getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 60)  return `${mins}m ago`;
-    const hrs = Math.floor(mins / 60);
-    if (hrs < 24)   return `${hrs}h ago`;
-    return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
-  } catch { return ""; }
+    const d = new Date(pub);
+    const diffMs = Date.now() - d.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    if (diffMins < 1) return "Just now";
+    if (diffMins < 60) return `${diffMins}m ago`;
+    const diffH = Math.floor(diffMins / 60);
+    if (diffH < 24) return `${diffH}h ago`;
+    const diffD = Math.floor(diffH / 24);
+    return `${diffD}d ago`;
+  } catch { return "Recently"; }
+}
+
+function NewsCard({ article }: { article: Article }) {
+  const col = SOURCE_COLORS[article.source] ?? "#6366f1";
+  const ago  = timeAgo(article.published);
+  return (
+    <a href={article.link ?? "#"} target="_blank" rel="noopener noreferrer"
+      style={{ display: "block", textDecoration: "none", color: "inherit" }}>
+      <div className="card" style={{ padding: "14px 16px", marginBottom: 10,
+        transition: "border-color 0.15s, transform 0.1s",
+        cursor: "pointer" }}
+        onMouseEnter={e => {
+          (e.currentTarget as HTMLDivElement).style.borderColor = col;
+          (e.currentTarget as HTMLDivElement).style.transform = "translateY(-1px)";
+        }}
+        onMouseLeave={e => {
+          (e.currentTarget as HTMLDivElement).style.borderColor = "";
+          (e.currentTarget as HTMLDivElement).style.transform = "";
+        }}>
+        <div style={{ display: "flex", justifyContent: "space-between",
+          alignItems: "flex-start", gap: 10 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, fontSize: "0.9rem", lineHeight: 1.4, marginBottom: 6,
+              color: "var(--text-primary)" }}>
+              {article.title}
+            </div>
+            {article.summary && (
+              <div style={{ fontSize: "0.786rem", color: "var(--text-secondary)", lineHeight: 1.5,
+                overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2,
+                WebkitBoxOrient: "vertical" as any }}>
+                {article.summary}
+              </div>
+            )}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8, flexWrap: "wrap" }}>
+              <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: "0.714rem",
+                fontWeight: 700, background: `${col}18`, color: col, border: `1px solid ${col}33` }}>
+                {article.source}
+              </span>
+              <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: "0.714rem",
+                background: "var(--surface-03)", color: "var(--text-tertiary)" }}>
+                {article.category}
+              </span>
+              <span style={{ fontSize: "0.714rem", color: "var(--text-tertiary)",
+                display: "flex", alignItems: "center", gap: 3 }}>
+                <Clock size={10} /> {ago}
+              </span>
+            </div>
+          </div>
+          <ExternalLink size={14} style={{ color: "var(--text-tertiary)", flexShrink: 0, marginTop: 2 }} />
+        </div>
+      </div>
+    </a>
+  );
 }
 
 export default function NewsPage() {
-  const [news,    setNews]    = useState<NewsItem[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [sources, setSources] = useState<string[]>([]);
-  const [srcFilter, setSrcFilter] = useState("");
-  const [lastAt,  setLastAt]  = useState<Date | null>(null);
-  const [error,   setError]   = useState("");
+  const [articles,  setArticles]  = useState<Article[]>([]);
+  const [loading,   setLoading]   = useState(false);
+  const [lastAt,    setLastAt]    = useState("");
+  const [filterSrc, setFilterSrc] = useState("");
+  const [search,    setSearch]    = useState("");
+  const [total,     setTotal]     = useState(0);
 
   const fetchNews = useCallback(async () => {
     setLoading(true);
-    setError("");
     try {
       const r = await fetch(`${API}/api/v1/news?limit=80`);
       if (r.ok) {
         const d = await r.json();
-        setNews(d.news || []);
-        setSources(d.sources || []);
-        setLastAt(new Date());
-      } else {
-        setError("Failed to fetch news. The backend may be starting up.");
+        setArticles(d.news ?? d.articles ?? []);
+        setTotal(d.total ?? 0);
+        setLastAt(new Date().toLocaleTimeString("en-IN"));
       }
-    } catch (e) {
-      setError("Could not connect to news service.");
     } finally { setLoading(false); }
   }, []);
 
   useEffect(() => { fetchNews(); }, [fetchNews]);
+  // Auto-refresh every 5 minutes
+  useEffect(() => {
+    const id = setInterval(fetchNews, 300000);
+    return () => clearInterval(id);
+  }, [fetchNews]);
 
-  const filtered = srcFilter ? news.filter(n => n.source === srcFilter) : news;
+  const shown = articles
+    .filter(a => !filterSrc || a.source === filterSrc)
+    .filter(a => !search || a.title.toLowerCase().includes(search.toLowerCase()) ||
+      (a.summary ?? "").toLowerCase().includes(search.toLowerCase()));
+
+  const sources = [...new Set(articles.map(a => a.source))];
 
   return (
-    <div style={{ maxWidth: 1200, margin: "0 auto" }}>
+    <div style={{ maxWidth: 1000, margin: "0 auto" }}>
+      {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end",
         marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
         <div>
@@ -73,117 +134,99 @@ export default function NewsPage() {
             <Newspaper size={20} /> Market News
           </h1>
           <p style={{ fontSize: "0.786rem", color: "var(--text-tertiary)" }}>
-            {filtered.length} articles · {sources.join(", ")}
-            {lastAt ? ` · Updated ${lastAt.toLocaleTimeString("en-IN")}` : ""}
+            Live RSS from ET · Moneycontrol · Business Standard · LiveMint ·
+            {total} articles{lastAt ? ` · ${lastAt}` : ""}
           </p>
         </div>
-        <button onClick={fetchNews} style={{
-          display: "flex", alignItems: "center", gap: 5,
-          background: "var(--surface-03)", border: "1px solid var(--border)",
-          color: "var(--text-secondary)", borderRadius: "var(--border-radius)",
-          padding: "6px 12px", cursor: "pointer", fontSize: "0.786rem",
-        }}>
+        <button onClick={fetchNews}
+          style={{ display: "flex", alignItems: "center", gap: 5, padding: "6px 14px",
+            background: "var(--surface-03)", border: "1px solid var(--border)",
+            color: "var(--text-secondary)", borderRadius: "var(--border-radius)",
+            cursor: "pointer", fontSize: "0.786rem" }}>
           <RefreshCw size={12} style={{ animation: loading ? "spin 1s linear infinite" : "none" }} />
           Refresh
         </button>
       </div>
 
-      {/* Source filters */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        <button onClick={() => setSrcFilter("")}
-          style={{
-            padding: "5px 12px", borderRadius: 20, cursor: "pointer", fontSize: "0.75rem",
-            background: !srcFilter ? "var(--accent)" : "var(--surface-03)",
-            border: `1px solid ${!srcFilter ? "var(--accent)" : "var(--border)"}`,
-            color: !srcFilter ? "#fff" : "var(--text-secondary)", fontWeight: 600,
-          }}>All Sources</button>
-        {sources.map(s => (
-          <button key={s} onClick={() => setSrcFilter(s === srcFilter ? "" : s)}
-            style={{
-              padding: "5px 12px", borderRadius: 20, cursor: "pointer", fontSize: "0.75rem",
-              background: srcFilter === s ? `${SOURCE_COLORS[s] ?? "#6366f1"}22` : "var(--surface-03)",
-              border: `1px solid ${srcFilter === s ? (SOURCE_COLORS[s] ?? "#6366f1") : "var(--border)"}`,
-              color: srcFilter === s ? (SOURCE_COLORS[s] ?? "var(--accent-bright)") : "var(--text-secondary)",
-              fontWeight: 600,
-            }}>{s}</button>
-        ))}
+      {/* Search + Filter */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+        <input value={search} onChange={e => setSearch(e.target.value)}
+          placeholder="Search news…"
+          style={{ flex: "1 1 220px", padding: "8px 12px", background: "var(--surface-03)",
+            border: "1px solid var(--border)", borderRadius: "var(--border-radius)",
+            color: "var(--text-primary)", fontSize: "0.857rem", outline: "none" }} />
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <button onClick={() => setFilterSrc("")}
+            style={{ padding: "6px 12px", borderRadius: "var(--border-radius)",
+              border: `1px solid ${!filterSrc ? "var(--accent)" : "var(--border)"}`,
+              background: !filterSrc ? "rgba(99,102,241,0.12)" : "var(--surface-03)",
+              color: !filterSrc ? "var(--accent-bright)" : "var(--text-secondary)",
+              cursor: "pointer", fontSize: "0.786rem", fontWeight: !filterSrc ? 700 : 500 }}>
+            All Sources
+          </button>
+          {sources.map(src => {
+            const col = SOURCE_COLORS[src] ?? "#6366f1";
+            const active = filterSrc === src;
+            return (
+              <button key={src} onClick={() => setFilterSrc(active ? "" : src)}
+                style={{ padding: "6px 12px", borderRadius: "var(--border-radius)",
+                  border: `1px solid ${active ? col : "var(--border)"}`,
+                  background: active ? `${col}18` : "var(--surface-03)",
+                  color: active ? col : "var(--text-secondary)",
+                  cursor: "pointer", fontSize: "0.786rem", fontWeight: active ? 700 : 500 }}>
+                {src}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      {error && (
-        <div style={{
-          background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)",
-          borderRadius: "var(--border-radius)", padding: "12px 16px", marginBottom: 16,
-          color: "var(--color-down)", fontSize: "0.857rem",
-        }}>{error}</div>
-      )}
+      {/* Stats */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+        {sources.map(src => {
+          const count = articles.filter(a => a.source === src).length;
+          const col   = SOURCE_COLORS[src] ?? "#6366f1";
+          return (
+            <div key={src} style={{ padding: "6px 12px", borderRadius: "var(--border-radius)",
+              background: `${col}12`, border: `1px solid ${col}33`,
+              fontSize: "0.786rem", color: col, fontWeight: 600 }}>
+              {src}: {count}
+            </div>
+          );
+        })}
+        <div style={{ padding: "6px 12px", borderRadius: "var(--border-radius)",
+          background: "var(--surface-03)", border: "1px solid var(--border)",
+          fontSize: "0.786rem", color: "var(--text-tertiary)" }}>
+          Showing: {shown.length}
+        </div>
+      </div>
 
-      {loading && (
-        <div className="card" style={{ textAlign: "center", padding: "60px 0", color: "var(--text-tertiary)" }}>
-          Fetching news from {sources.length || 4} sources…
+      {/* Loading */}
+      {loading && articles.length === 0 && (
+        <div style={{ textAlign: "center", padding: "60px 20px", color: "var(--text-tertiary)" }}>
+          <RefreshCw size={24} style={{ animation: "spin 1s linear infinite", marginBottom: 12, display: "block", margin: "0 auto 12px" }} />
+          Fetching live news from RSS feeds…
         </div>
       )}
 
-      {/* News grid */}
-      {!loading && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 14 }}>
-          {filtered.map((item, i) => (
-            <a key={i} href={item.link || "#"} target="_blank" rel="noopener noreferrer"
-              style={{ textDecoration: "none" }}>
-              <div className="card" style={{
-                height: "100%", cursor: "pointer",
-                transition: "transform 0.15s ease, border-color 0.15s",
-              }}
-                onMouseEnter={e => {
-                  (e.currentTarget as HTMLElement).style.transform = "translateY(-2px)";
-                  (e.currentTarget as HTMLElement).style.borderColor = "var(--accent)";
-                }}
-                onMouseLeave={e => {
-                  (e.currentTarget as HTMLElement).style.transform = "";
-                  (e.currentTarget as HTMLElement).style.borderColor = "";
-                }}>
-                {/* Source badge + time */}
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                  <span style={{
-                    fontSize: "0.643rem", fontWeight: 700, padding: "2px 7px", borderRadius: 10,
-                    background: `${SOURCE_COLORS[item.source] ?? "#6366f1"}22`,
-                    color: SOURCE_COLORS[item.source] ?? "var(--accent-bright)",
-                  }}>{item.source}</span>
-                  {item.published && (
-                    <span style={{ fontSize: "0.643rem", color: "var(--text-tertiary)",
-                      display: "flex", alignItems: "center", gap: 3 }}>
-                      <Clock size={9} /> {timeAgo(item.published)}
-                    </span>
-                  )}
-                </div>
+      {/* News list */}
+      {shown.map((a, i) => <NewsCard key={i} article={a} />)}
 
-                {/* Title */}
-                <div style={{ fontWeight: 600, fontSize: "0.9rem", lineHeight: 1.4,
-                  color: "var(--text-primary)", marginBottom: 8 }}>
-                  {item.title}
-                </div>
-
-                {/* Summary */}
-                {item.summary && (
-                  <div style={{ fontSize: "0.786rem", color: "var(--text-secondary)",
-                    lineHeight: 1.5, display: "-webkit-box", WebkitLineClamp: 3,
-                    WebkitBoxOrient: "vertical", overflow: "hidden" }}>
-                    {item.summary}
-                  </div>
-                )}
-
-                <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 4,
-                  fontSize: "0.714rem", color: "var(--accent-bright)" }}>
-                  <ExternalLink size={10} /> Read more
-                </div>
-              </div>
-            </a>
-          ))}
+      {!loading && shown.length === 0 && articles.length > 0 && (
+        <div style={{ textAlign: "center", padding: "40px", color: "var(--text-tertiary)" }}>
+          No articles match your search.
         </div>
       )}
 
-      {!loading && filtered.length === 0 && !error && (
-        <div className="card" style={{ textAlign: "center", padding: "60px 0", color: "var(--text-tertiary)" }}>
-          No news available. RSS feeds may be temporarily unavailable.
+      {!loading && articles.length === 0 && (
+        <div className="card" style={{ padding: "40px 20px", textAlign: "center", color: "var(--text-tertiary)" }}>
+          <Newspaper size={32} style={{ opacity: 0.3, marginBottom: 12, display: "block", margin: "0 auto 12px" }} />
+          <div>Could not fetch news. RSS feeds may be temporarily unavailable.</div>
+          <button onClick={fetchNews} style={{ marginTop: 12, padding: "8px 16px",
+            background: "var(--accent)", border: "none", borderRadius: "var(--border-radius)",
+            color: "#fff", cursor: "pointer", fontWeight: 600 }}>
+            Try Again
+          </button>
         </div>
       )}
 

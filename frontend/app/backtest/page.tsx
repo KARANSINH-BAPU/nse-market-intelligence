@@ -34,13 +34,13 @@ export default function BacktestPage() {
     setLoading(true); setError(""); setResult(null);
     try {
       const r = await fetch(
-        `${API}/api/v1/features/${symbol.toUpperCase().trim()}?include_signals=true`
+        `${API}/api/v1/ohlcv/${symbol.toUpperCase().trim()}?period=1y`
       );
-      if (!r.ok) { setError(`No data for ${symbol}. Check symbol.`); return; }
-      const feat = await r.json();
+      if (!r.ok) { setError(`No data for ${symbol}. Check symbol is a valid NSE ticker.`); return; }
+      const d = await r.json();
 
       // Simulate backtest on closes array using selected strategy
-      const bars  = feat.bars ?? [];
+      const bars  = d.bars ?? [];
       if (bars.length < 30) { setError("Not enough historical data (need 30+ bars)"); return; }
 
       const closes  = bars.map((b: any) => b.close);
