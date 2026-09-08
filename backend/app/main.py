@@ -4,6 +4,7 @@ KP Backend — FastAPI Application Entry Point
 
 from __future__ import annotations
 
+import asyncio
 import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -12,7 +13,7 @@ import structlog
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import ORJSONResponse
+from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.logging import setup_logging
@@ -26,6 +27,7 @@ from app.api.v1.auth import router as auth_router
 from app.api.v1.watchlist import router as watchlist_router
 from app.api.v1.features import router as features_router
 from app.websockets.manager import ws_manager
+from app.websockets.broadcaster import market_ticker_loop
 # Import all models to register with SQLAlchemy metadata
 import app.models  # noqa: F401
 
@@ -61,9 +63,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as exc:
         log.warning("redis_unavailable", error=str(exc))
 
+    # Start background market ticker
+    ticker_task = asyncio.create_task(market_ticker_loop(), name="market_ticker")
+    log.info("market_ticker_started")
+
     yield
 
     # Shutdown
+    ticker_task.cancel()
+    try:
+        await ticker_task
+    except asyncio.CancelledError:
+        pass
     log.info("kp_shutdown")
     await redis_client.close()
     await engine.dispose()
@@ -82,7 +93,7 @@ def create_app() -> FastAPI:
         docs_url="/docs" if settings.DEBUG else None,
         redoc_url="/redoc" if settings.DEBUG else None,
         openapi_url="/openapi.json" if settings.DEBUG else None,
-        default_response_class=ORJSONResponse,
+        default_response_class=JSONResponse,
         lifespan=lifespan,
     )
 
