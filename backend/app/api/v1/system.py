@@ -10,7 +10,6 @@ from typing import Any
 
 import structlog
 from fastapi import APIRouter
-from fastapi.responses import ORJSONResponse
 
 from app.core.config import settings
 from app.db.redis import redis_client
@@ -25,7 +24,7 @@ router = APIRouter()
     summary="System component status",
     response_description="Real-time status of all KP components",
 )
-async def system_status() -> ORJSONResponse:
+async def system_status() -> dict[str, Any]:
     """
     Returns real-time status of all KP platform components.
     Only reports what can be measured — never fabricates status.
@@ -100,7 +99,7 @@ async def system_status() -> ORJSONResponse:
         "market_replay": settings.FEATURE_MARKET_REPLAY,
     }
 
-    return ORJSONResponse(content=status_report)
+    return status_report
 
 
 @router.get(

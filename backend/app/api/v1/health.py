@@ -12,7 +12,7 @@ from typing import Any
 
 import structlog
 from fastapi import APIRouter, status
-from fastapi.responses import ORJSONResponse
+from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.db.redis import redis_client
@@ -63,7 +63,7 @@ async def liveness() -> dict[str, str]:
     summary="Readiness probe",
     status_code=status.HTTP_200_OK,
 )
-async def readiness() -> ORJSONResponse:
+async def readiness() -> JSONResponse:
     """
     Kubernetes-compatible readiness probe.
     Checks: PostgreSQL connectivity + Redis connectivity.
@@ -109,4 +109,4 @@ async def readiness() -> ORJSONResponse:
     }
 
     status_code = status.HTTP_200_OK if overall_ready else status.HTTP_503_SERVICE_UNAVAILABLE
-    return ORJSONResponse(content=response_body, status_code=status_code)
+    return JSONResponse(content=response_body, status_code=status_code)
