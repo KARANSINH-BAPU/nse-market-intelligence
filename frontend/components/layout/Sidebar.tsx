@@ -76,12 +76,13 @@ export function Sidebar() {
 
   return (
     <nav style={{
-      width: 200, minWidth: 200, height: "100vh",
+      width: 210, minWidth: 210, flexShrink: 0,
+      height: "100vh",                         /* Fill full viewport height */
       background: "var(--surface-01)",
       borderRight: "1px solid var(--border)",
       display: "flex", flexDirection: "column",
-      overflowY: "auto", overflowX: "hidden",
-      position: "sticky", top: 0,
+      overflowY: "auto", overflowX: "hidden",  /* Sidebar itself can scroll if menu is long */
+      scrollbarWidth: "none",                  /* Hide sidebar scrollbar */
     }}>
       {/* Logo */}
       <div style={{ padding: "20px 16px 12px", borderBottom: "1px solid var(--border)" }}>
