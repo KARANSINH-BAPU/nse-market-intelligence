@@ -70,6 +70,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     ticker_task = asyncio.create_task(market_ticker_loop(), name="market_ticker")
     log.info("market_ticker_started")
 
+    # Start live quote service (loads all 2060 stocks from DB, then yfinance)
+    try:
+        from app.services.live_quotes import start_background_refresh
+        asyncio.create_task(start_background_refresh(), name="live_quotes")
+        log.info("live_quote_service_started")
+    except Exception as e:
+        log.warning("live_quote_service_failed", error=str(e))
+
     yield
 
     # Shutdown

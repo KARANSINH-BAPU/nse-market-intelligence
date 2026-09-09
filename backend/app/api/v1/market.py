@@ -1,8 +1,7 @@
 """
 KP — Market API (movers, breadth, sector-performance, all-stocks, search, quote)
 
-All data from PostgreSQL ohlcv_daily — real yfinance data, never fabricated.
-prev_close backfilled via LAG window; also stored in column after migration.
+All data from PostgreSQL ohlcv_daily + live_quotes service.
 """
 from __future__ import annotations
 
@@ -22,7 +21,6 @@ DB = "postgresql://kp_user:kp_dev_password@localhost:5432/kp_db"
 
 
 def _safe_float(v) -> float:
-    """Convert to float; return 0.0 for None/NaN/Inf."""
     try:
         f = float(v)
         return 0.0 if (math.isnan(f) or math.isinf(f)) else f
@@ -35,7 +33,6 @@ async def _latest_date(conn) -> date:
     return row["dt"] if row and row["dt"] else date.today() - timedelta(days=1)
 
 
-# Inline subquery that computes prev_close from LAG when column is NULL
 OHLCV_WITH_PREV = """(
     SELECT id, symbol, trade_date, open, high, low, close, volume,
            COALESCE(prev_close,
@@ -53,58 +50,34 @@ class IndexQuote(BaseModel):
     source: str
 
 
-# ── Movers ──────────────────────────────────────────────────────────────────
+# ── Movers ─────────────────────────────────────────────────────────────────────
 @router.get("/movers")
 async def get_movers(limit: int = Query(10, ge=1, le=50)):
-    """Top gainers and losers from the most recent trading session."""
-    conn = await asyncpg.connect(DB)
-    try:
-        latest = await _latest_date(conn)
-        rows = await conn.fetch(
-            f"""
-            SELECT
-                ohlcv_base.symbol,
-                COALESCE(i.company_name, ohlcv_base.symbol) AS name,
-                s.name                                      AS sector,
-                ohlcv_base.close,
-                ohlcv_base.prev_close,
-                (ohlcv_base.close - ohlcv_base.prev_close)  AS change,
-                ROUND(((ohlcv_base.close - ohlcv_base.prev_close) / ohlcv_base.prev_close * 100)::numeric, 2) AS change_pct,
-                ohlcv_base.volume
-            FROM {OHLCV_WITH_PREV}
-            LEFT JOIN instruments i ON i.symbol = ohlcv_base.symbol AND i.exchange = 'NSE'
-            LEFT JOIN sectors s ON s.id = i.sector_id
-            WHERE ohlcv_base.trade_date = $1
-              AND ohlcv_base.prev_close IS NOT NULL
-              AND ohlcv_base.prev_close > 0
-              AND ohlcv_base.close > 0
-            """,
-            latest,
-        )
+    """Top gainers and losers from the live quote cache."""
+    from app.services.live_quotes import get_live_quotes
+    quotes = await get_live_quotes()
+    stocks = list(quotes.values())
+    gainers = sorted(stocks, key=lambda x: x.get("change_pct") or 0, reverse=True)[:limit]
+    losers  = sorted(stocks, key=lambda x: x.get("change_pct") or 0)[:limit]
 
-        def row_dict(r) -> dict:
-            return {
-                "symbol":     r["symbol"],
-                "name":       r["name"],
-                "sector":     r["sector"],
-                "close":      _safe_float(r["close"]),
-                "prev_close": _safe_float(r["prev_close"]),
-                "change":     _safe_float(r["change"]),
-                "change_pct": _safe_float(r["change_pct"]),
-                "volume":     int(r["volume"]) if r["volume"] else 0,
-                "trade_date": str(latest),
-            }
+    def fmt(q):
+        return {
+            "symbol":     q["symbol"],
+            "name":       q.get("name", q["symbol"]),
+            "close":      q.get("ltp") or 0,
+            "change_pct": q.get("change_pct") or 0,
+            "volume":     q.get("volume") or 0,
+        }
 
-        all_m   = [row_dict(r) for r in rows]
-        gainers = sorted(all_m, key=lambda x: x["change_pct"], reverse=True)[:limit]
-        losers  = sorted(all_m, key=lambda x: x["change_pct"])[:limit]
-        return {"gainers": gainers, "losers": losers,
-                "trade_date": str(latest), "total_stocks": len(all_m)}
-    finally:
-        await conn.close()
+    return {
+        "gainers":      [fmt(g) for g in gainers],
+        "losers":       [fmt(l) for l in losers],
+        "trade_date":   gainers[0].get("trade_date") if gainers else str(date.today()),
+        "total_stocks": len(stocks),
+    }
 
 
-# ── Breadth ──────────────────────────────────────────────────────────────────
+# ── Breadth ─────────────────────────────────────────────────────────────────────
 @router.get("/breadth")
 async def get_breadth():
     conn = await asyncpg.connect(DB)
@@ -138,7 +111,7 @@ async def get_breadth():
         await conn.close()
 
 
-# ── Sector Performance ────────────────────────────────────────────────────────
+# ── Sector Performance ─────────────────────────────────────────────────────────
 @router.get("/sector-performance")
 async def get_sector_performance():
     conn = await asyncpg.connect(DB)
@@ -182,223 +155,143 @@ async def get_sector_performance():
             if not sector:
                 continue
             avg = _safe_float(r["avg_chg_pct"])
-
-            tg = await conn.fetchrow(
-                f"""
-                SELECT ohlcv_base.symbol FROM {OHLCV_WITH_PREV}
-                LEFT JOIN instruments i ON i.symbol = ohlcv_base.symbol AND i.exchange = 'NSE'
-                LEFT JOIN sectors s ON s.id = i.sector_id
-                WHERE ohlcv_base.trade_date = $1 AND ohlcv_base.prev_close > 0
-                  AND {grp} = $2
-                ORDER BY (ohlcv_base.close - ohlcv_base.prev_close) / ohlcv_base.prev_close DESC LIMIT 1
-                """,
-                latest, sector,
-            )
-            tl = await conn.fetchrow(
-                f"""
-                SELECT ohlcv_base.symbol FROM {OHLCV_WITH_PREV}
-                LEFT JOIN instruments i ON i.symbol = ohlcv_base.symbol AND i.exchange = 'NSE'
-                LEFT JOIN sectors s ON s.id = i.sector_id
-                WHERE ohlcv_base.trade_date = $1 AND ohlcv_base.prev_close > 0
-                  AND {grp} = $2
-                ORDER BY (ohlcv_base.close - ohlcv_base.prev_close) / ohlcv_base.prev_close ASC LIMIT 1
-                """,
-                latest, sector,
-            )
             result.append({
                 "sector":         sector,
                 "avg_change_pct": avg,
                 "stock_count":    int(r["stock_count"]),
                 "advances":       int(r["advances"]),
                 "declines":       int(r["declines"]),
-                "top_gainer":     tg["symbol"] if tg else None,
-                "top_loser":      tl["symbol"] if tl else None,
+                "top_gainer":     None,
+                "top_loser":      None,
             })
         return result
     finally:
         await conn.close()
 
 
-# ── Snapshot ──────────────────────────────────────────────────────────────────
+# ── Snapshot ───────────────────────────────────────────────────────────────────
 @router.get("/snapshot")
 async def get_snapshot():
     return await cached_snapshot()
-
-
-# ── Quote ──────────────────────────────────────────────────────────────────────
-@router.get("/quote/{symbol}", response_model=IndexQuote)
-async def get_quote(symbol: str) -> IndexQuote:
-    import yfinance as yf
-    sym = symbol.upper().strip()
-    ltp = change = change_pct = None
-    source = "ohlcv_daily"
-    try:
-        info = yf.Ticker(f"{sym}.NS").fast_info
-        ltp  = getattr(info, "last_price", None)
-        prev = getattr(info, "previous_close", None)
-        if ltp and prev and prev > 0:
-            change     = round(ltp - prev, 2)
-            change_pct = round((ltp - prev) / prev * 100, 4)
-            source     = "yfinance"
-    except Exception:
-        pass
-
-    if ltp is None:
-        conn = await asyncpg.connect(DB)
-        try:
-            r = await conn.fetchrow(
-                f"""
-                SELECT ohlcv_base.close, ohlcv_base.prev_close FROM {OHLCV_WITH_PREV}
-                WHERE ohlcv_base.symbol = $1
-                ORDER BY ohlcv_base.trade_date DESC LIMIT 1
-                """,
-                sym,
-            )
-            if r:
-                ltp  = _safe_float(r["close"]) or None
-                prev = _safe_float(r["prev_close"]) or None
-                if ltp and prev and prev > 0:
-                    change     = round(ltp - prev, 2)
-                    change_pct = round((ltp - prev) / prev * 100, 4)
-        finally:
-            await conn.close()
-
-    if ltp is None:
-        raise HTTPException(status_code=404, detail=f"No data for {sym}")
-
-    return IndexQuote(symbol=sym, ltp=ltp, change=change,
-                      change_pct=change_pct, source=source)
-
-
-# ── Global Search ─────────────────────────────────────────────────────────────
-@router.get("/search")
-async def search_stocks(
-    q:     str = Query(..., min_length=1),
-    limit: int = Query(15, ge=1, le=50),
-) -> list[dict]:
-    """Search all NSE stocks by symbol or company name. Used by global search bar."""
-    conn = await asyncpg.connect(DB)
-    try:
-        latest = await _latest_date(conn)
-        rows = await conn.fetch(
-            f"""
-            SELECT DISTINCT ON (ohlcv_base.symbol)
-                ohlcv_base.symbol,
-                COALESCE(i.company_name, ohlcv_base.symbol) AS name,
-                ohlcv_base.close,
-                ROUND(CASE WHEN ohlcv_base.prev_close > 0
-                    THEN ((ohlcv_base.close - ohlcv_base.prev_close) / ohlcv_base.prev_close * 100)
-                    ELSE 0 END::numeric, 2) AS change_pct
-            FROM {OHLCV_WITH_PREV}
-            LEFT JOIN instruments i ON i.symbol = ohlcv_base.symbol AND i.exchange = 'NSE'
-            WHERE ohlcv_base.trade_date = $1
-              AND (
-                UPPER(ohlcv_base.symbol) LIKE $2
-                OR UPPER(COALESCE(i.company_name, '')) LIKE $2
-              )
-            ORDER BY ohlcv_base.symbol, ohlcv_base.trade_date DESC
-            LIMIT $3
-            """,
-            latest, f"%{q.upper()}%", limit,
-        )
-        return [{
-            "symbol":     r["symbol"],
-            "name":       r["name"],
-            "close":      _safe_float(r["close"]),
-            "change_pct": _safe_float(r["change_pct"]),
-        } for r in rows]
-    finally:
-        await conn.close()
 
 
 # ── All Stocks ─────────────────────────────────────────────────────────────────
 @router.get("/all-stocks")
 async def get_all_stocks(
     page:    int        = Query(1, ge=1),
-    size:    int        = Query(50, ge=1, le=200),
+    size:    int        = Query(50, ge=1, le=500),
     search:  str | None = Query(None),
     sort_by: str        = Query("change_pct"),
     order:   str        = Query("desc"),
 ) -> dict:
-    conn = await asyncpg.connect(DB)
-    try:
-        latest = await _latest_date(conn)
+    """
+    Returns ALL 2060 NSE stocks with live prices from the live quote cache.
+    Cache refreshes every 3 minutes during market hours, 15 minutes otherwise.
+    """
+    from app.services.live_quotes import get_live_quotes
+    quotes = await get_live_quotes()
 
-        search_sql = ""
-        params: list = [latest]
-        idx = 2
-        if search:
-            search_sql = (
-                f" AND (UPPER(ohlcv_base.symbol) LIKE ${idx}"
-                f" OR UPPER(COALESCE(i.company_name,'')) LIKE ${idx})"
-            )
-            params.append(f"%{search.upper()}%")
-            idx += 1
+    stocks = list(quotes.values())
 
-        sort_map = {
-            "change_pct": "change_pct",
-            "close":      "close",
-            "volume":     "volume",
-            "symbol":     "symbol",
+    # Search
+    if search:
+        s = search.upper()
+        stocks = [q for q in stocks if s in q.get("symbol", "") or s in (q.get("name") or "").upper()]
+
+    # Sort
+    sort_map = {"change_pct": "change_pct", "close": "ltp", "ltp": "ltp",
+                "volume": "volume", "symbol": "symbol"}
+    key = sort_map.get(sort_by, "change_pct")
+    reverse = order.lower() != "asc"
+    stocks.sort(key=lambda x: (x.get(key) or 0) if key != "symbol" else (x.get("symbol") or ""),
+                reverse=reverse)
+
+    total = len(stocks)
+    start = (page - 1) * size
+    page_data = stocks[start:start + size]
+
+    return {
+        "stocks": [{
+            "symbol":     q["symbol"],
+            "name":       q.get("name", q["symbol"]),
+            "sector":     q.get("sector"),
+            "close":      q.get("ltp") or 0,
+            "ltp":        q.get("ltp") or 0,
+            "prev_close": q.get("prev_close"),
+            "change":     q.get("change") or 0,
+            "change_pct": q.get("change_pct") or 0,
+            "volume":     q.get("volume") or 0,
+            "high":       q.get("high"),
+            "low":        q.get("low"),
+            "open":       q.get("open"),
+            "source":     q.get("source", "ohlcv_daily"),
+            "trade_date": q.get("trade_date"),
+        } for q in page_data],
+        "total":      total,
+        "page":       page,
+        "size":       size,
+        "pages":      max(1, (total + size - 1) // size),
+        "trade_date": page_data[0].get("trade_date") if page_data else str(date.today()),
+        "live":       any(q.get("source") == "yfinance_live" for q in page_data),
+    }
+
+
+# ── Live Quotes Bulk ───────────────────────────────────────────────────────────
+@router.get("/live-quotes")
+async def get_live_quotes_bulk(
+    symbols: str | None = Query(None, description="Comma-separated NSE symbols"),
+    force:   bool       = Query(False),
+) -> dict:
+    """Fast bulk live quote lookup. ?symbols=RELIANCE,TCS or no param for all."""
+    from app.services.live_quotes import get_live_quotes
+    all_q = await get_live_quotes(force_refresh=force)
+
+    if symbols:
+        syms = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+        result = {s: all_q[s] for s in syms if s in all_q}
+    else:
+        result = all_q
+
+    return {"quotes": result, "count": len(result)}
+
+
+# ── Global Search ──────────────────────────────────────────────────────────────
+@router.get("/search")
+async def search_stocks(
+    q:     str = Query(..., min_length=1),
+    limit: int = Query(15, ge=1, le=50),
+) -> list[dict]:
+    """Search all NSE stocks by symbol or company name."""
+    from app.services.live_quotes import get_live_quotes
+    quotes = await get_live_quotes()
+    s = q.upper()
+    results = [
+        {
+            "symbol":     v["symbol"],
+            "name":       v.get("name", v["symbol"]),
+            "close":      v.get("ltp") or 0,
+            "change_pct": v.get("change_pct") or 0,
         }
-        sort_col = sort_map.get(sort_by, "change_pct")
-        sort_dir = "ASC" if order.lower() == "asc" else "DESC"
+        for v in quotes.values()
+        if s in v.get("symbol", "") or s in (v.get("name") or "").upper()
+    ]
+    # Sort exact symbol matches first
+    results.sort(key=lambda x: (0 if x["symbol"].startswith(s) else 1, x["symbol"]))
+    return results[:limit]
 
-        base = f"""
-            SELECT
-                ohlcv_base.symbol,
-                COALESCE(i.company_name, ohlcv_base.symbol) AS name,
-                s.name AS sector,
-                ohlcv_base.close,
-                ohlcv_base.prev_close,
-                (ohlcv_base.close - ohlcv_base.prev_close) AS change,
-                ROUND(CASE WHEN ohlcv_base.prev_close > 0
-                    THEN ((ohlcv_base.close - ohlcv_base.prev_close) / ohlcv_base.prev_close * 100)
-                    ELSE 0 END::numeric, 2) AS change_pct,
-                ohlcv_base.volume,
-                ohlcv_base.high,
-                ohlcv_base.low,
-                ohlcv_base.open
-            FROM {OHLCV_WITH_PREV}
-            LEFT JOIN instruments i
-              ON i.symbol = ohlcv_base.symbol AND i.exchange = 'NSE'
-            LEFT JOIN sectors s ON s.id = i.sector_id
-            WHERE ohlcv_base.trade_date = $1
-              AND ohlcv_base.close > 0
-              {search_sql}
-        """
 
-        total = await conn.fetchval(
-            f"SELECT COUNT(*) FROM ({base}) counted", *params
-        )
-        data = await conn.fetch(
-            f"""
-            SELECT * FROM ({base}) ranked
-            ORDER BY {sort_col} {sort_dir} NULLS LAST
-            LIMIT ${idx} OFFSET ${idx + 1}
-            """,
-            *params, size, (page - 1) * size,
-        )
-
-        return {
-            "stocks": [{
-                "symbol":     r["symbol"],
-                "name":       r["name"],
-                "sector":     r["sector"],
-                "close":      _safe_float(r["close"]),
-                "prev_close": _safe_float(r["prev_close"]),
-                "change":     _safe_float(r["change"]),
-                "change_pct": _safe_float(r["change_pct"]),
-                "volume":     int(r["volume"]) if r["volume"] else 0,
-                "high":       _safe_float(r["high"]) or None,
-                "low":        _safe_float(r["low"]) or None,
-                "open":       _safe_float(r["open"]) or None,
-            } for r in data],
-            "total":      total,
-            "page":       page,
-            "size":       size,
-            "pages":      max(1, (total + size - 1) // size),
-            "trade_date": str(latest),
-        }
-    finally:
-        await conn.close()
+# ── Quote Single ───────────────────────────────────────────────────────────────
+@router.get("/quote/{symbol}", response_model=IndexQuote)
+async def get_quote(symbol: str) -> IndexQuote:
+    from app.services.live_quotes import get_quote_single
+    sym = symbol.upper().strip()
+    q = await get_quote_single(sym)
+    if not q:
+        raise HTTPException(status_code=404, detail=f"No data for {sym}")
+    return IndexQuote(
+        symbol=sym,
+        ltp=q.get("ltp"),
+        change=q.get("change"),
+        change_pct=q.get("change_pct"),
+        source=q.get("source", "ohlcv_daily"),
+    )
