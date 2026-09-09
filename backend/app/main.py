@@ -144,6 +144,30 @@ def create_app() -> FastAPI:
         response.headers["X-Process-Time"] = f"{duration_ms}ms"
         return response
 
+    # ── Root Route ──────────────────────────────────────────
+    @app.get("/", include_in_schema=False)
+    async def root():
+        return JSONResponse({
+            "service":     "KP — NSE Market Intelligence Platform",
+            "version":     settings.APP_VERSION,
+            "status":      "running",
+            "frontend":    "http://localhost:3000",
+            "api_docs":    "http://localhost:8000/docs",
+            "api_version": "v1",
+            "endpoints": {
+                "snapshot":    "/api/v1/market/snapshot",
+                "all_stocks":  "/api/v1/market/all-stocks",
+                "movers":      "/api/v1/market/movers",
+                "search":      "/api/v1/market/search?q=RELIANCE",
+                "ohlcv":       "/api/v1/ohlcv/RELIANCE?period=1y",
+                "signals":     "/api/v1/signals?limit=50",
+                "news":        "/api/v1/news?limit=20",
+                "instruments": "/api/v1/instruments?page=1&page_size=50",
+                "websocket":   "ws://localhost:8000/ws",
+            },
+            "note": "Open http://localhost:3000 in your browser for the full platform UI",
+        })
+
     # ── Include Routers ─────────────────────────────────────
     app.include_router(health_router, prefix="", tags=["Health"])
     app.include_router(system_router, prefix="/api/v1/system", tags=["System"])
