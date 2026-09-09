@@ -66,14 +66,15 @@ export default function InstrumentDetailPage() {
     if (!SYM) return;
     setLoading(true);
     try {
-      // Fetch OHLCV history from our DB
+      // Fetch OHLCV history AND live quote in parallel
       const [ohlcvRes, quoteRes] = await Promise.allSettled([
         fetch(`${API}/api/v1/ohlcv/${SYM}?period=${period}`).then(r => r.ok ? r.json() : null),
-        fetch(`${API}/api/v1/market/search?q=${SYM}&limit=1`).then(r => r.ok ? r.json() : null),
+        // Use /quote/{symbol} which calls yfinance for live intraday price
+        fetch(`${API}/api/v1/market/quote/${SYM}`).then(r => r.ok ? r.json() : null),
       ]);
       if (ohlcvRes.status === "fulfilled" && ohlcvRes.value) setData(ohlcvRes.value);
-      if (quoteRes.status === "fulfilled" && quoteRes.value?.results?.length) {
-        setQuote(quoteRes.value.results[0]);
+      if (quoteRes.status === "fulfilled" && quoteRes.value) {
+        setQuote(quoteRes.value);  // { symbol, ltp, change, change_pct, source }
       }
       setLastAt(new Date());
     } finally { setLoading(false); }
@@ -81,25 +82,27 @@ export default function InstrumentDetailPage() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // Auto-refresh price every 30s
+  // Live price refresh every 15s during market hours (9:15–15:30 IST)
   useEffect(() => {
     const id = setInterval(async () => {
       if (!SYM) return;
       try {
-        const r = await fetch(`${API}/api/v1/market/search?q=${SYM}&limit=1`);
+        const r = await fetch(`${API}/api/v1/market/quote/${SYM}`);
         if (r.ok) {
           const d = await r.json();
-          if (d.results?.length) setQuote(d.results[0]);
+          setQuote(d);
         }
       } catch {}
-    }, 30000);
+    }, 15000);   // every 15 seconds
     return () => clearInterval(id);
   }, [SYM]);
 
-  const latest = data?.bars[data.bars.length - 1];
-  const ltp    = quote?.close ?? latest?.close;
-  const change = quote?.change_pct ?? latest?.change_pct;
-  const up     = (change ?? 0) >= 0;
+  const latest  = data?.bars[data.bars.length - 1];
+  // quote.ltp = live intraday price from yfinance; fallback to DB close
+  const ltp     = quote?.ltp ?? latest?.close;
+  const change  = quote?.change_pct ?? latest?.change_pct;
+  const up      = (change ?? 0) >= 0;
+  const isLive  = !!quote?.ltp;  // true if we have intraday data from yfinance
 
   // For TechnicalChart — MUST match FeatureRow interface exactly:
   // date, close, open, high, low, volume, rsi_14, macd_line, macd_signal, macd_hist, sma_20, ema_12
@@ -137,17 +140,19 @@ export default function InstrumentDetailPage() {
         <div style={{ display: "flex", justifyContent: "space-between",
           alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
           <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
               <h1 style={{ fontSize: "1.5rem", fontWeight: 800,
                 fontFamily: "var(--font-mono)", margin: 0 }}>{SYM}</h1>
               <span className="data-source live">NSE · EQ</span>
-              <span className="data-source">yfinance</span>
-              {quote?.name && (
-                <span style={{ fontSize: "0.857rem", color: "var(--text-tertiary)",
-                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 300 }}>
-                  {quote.name}
-                </span>
-              )}
+              {/* LIVE = intraday from yfinance, EOD = last close from DB */}
+              <span style={{ padding: "2px 7px", borderRadius: 4, fontSize: "0.643rem",
+                fontWeight: 800, letterSpacing: "0.06em",
+                background: isLive ? "rgba(34,211,165,0.15)" : "rgba(245,158,11,0.15)",
+                color: isLive ? "#22d3a5" : "#f59e0b",
+                border: `1px solid ${isLive ? "rgba(34,211,165,0.3)" : "rgba(245,158,11,0.3)"}` }}>
+                {isLive ? "🟢 LIVE" : "🟡 EOD"}
+              </span>
+              <span className="data-source">{quote?.source ?? "ohlcv_daily"}</span>
             </div>
             <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
               <span style={{ fontSize: "2.2rem", fontWeight: 700,
@@ -182,7 +187,7 @@ export default function InstrumentDetailPage() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px,1fr))",
           gap: 10, marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
           {[
-            { label: "Prev Close", value: latest ? `₹${fmt(latest.open)}` : "—" },
+            { label: "Prev Close", value: latest?.close != null ? `₹${fmt(latest.close)}` : (quote?.prev_close ? `₹${fmt(quote.prev_close)}` : "—") },
             { label: "Open",       value: latest ? `₹${fmt(latest.open)}` : "—" },
             { label: "Day High",   value: latest ? `₹${fmt(latest.high)}` : "—" },
             { label: "Day Low",    value: latest ? `₹${fmt(latest.low)}` : "—" },

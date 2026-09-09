@@ -67,7 +67,7 @@ def _sma(closes: list[float], n: int) -> list[float | None]:
 @router.get("/{symbol}")
 async def get_ohlcv(
     symbol: str,
-    period: str = Query("1y", regex="^(1m|3m|6m|1y)$"),
+    period: str = Query("1y", pattern="^(1m|3m|6m|1y)$"),
 ) -> dict:
     """
     Returns full OHLCV bar history + computed indicators.
