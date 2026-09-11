@@ -99,17 +99,13 @@ export function SystemStatus({ compact = false }: { compact?: boolean }) {
 
   // Compact mode: just show overall dot in header
   if (compact) {
-    const allOnline =
-      data?.components?.database?.status === "online" &&
-      data?.components?.redis?.status === "online";
-    const anyOffline =
-      data?.components?.database?.status === "offline" ||
-      data?.components?.redis?.status === "offline";
+    // Only DB being offline = truly offline. Redis offline = degraded (it's optional cache).
+    const dbStatus = data?.components?.database?.status;
     const overallStatus = error || !data
       ? "unknown"
-      : anyOffline
+      : dbStatus === "offline"
       ? "offline"
-      : allOnline
+      : dbStatus === "online"
       ? "online"
       : "degraded";
 
