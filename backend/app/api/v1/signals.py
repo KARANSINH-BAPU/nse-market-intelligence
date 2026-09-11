@@ -41,6 +41,11 @@ class Signal(BaseModel):
     change_pct:  float
     trade_date:  str
     description: str
+    # Price action fields
+    buy_price:   float | None = None   # Recommended entry price (BUY signals)
+    sell_price:  float | None = None   # Recommended entry price (SELL signals)
+    target:      float | None = None   # Target / take-profit price
+    stop_loss:   float | None = None   # Stop-loss price
     disclaimer:  str = "Technical indicator only — not financial advice"
 
 
@@ -88,53 +93,88 @@ def _compute_macd(closes: list[float]) -> tuple[float | None, float | None]:
     return round(macd_line[-1], 4), round(signal_ema[-1], 4)
 
 
-def _classify_signal(rsi, macd, macd_sig, close, sma20) -> list[dict]:
-    """Return list of signals for a stock. May have 0-3 signals."""
+def _compute_levels(signal_type: str, close: float, sma20: float | None, recent_high: float | None, recent_low: float | None) -> dict:
+    """
+    Compute actionable price levels for a signal:
+    - BUY signals: buy_price near support, target ~5-10% above, stop_loss ~3-4% below
+    - SELL signals: sell_price near resistance, target ~5-10% below, stop_loss ~3% above
+    """
+    support    = sma20 or close
+    resistance = recent_high or close * 1.07
+
+    if signal_type in ("RSI_OVERSOLD", "MACD_BULL", "SMA_BULL"):
+        # BUY setup
+        buy_price  = round(support * 0.995, 2)           # Just below SMA20 support
+        target     = round(close * 1.07, 2)              # 7% upside target
+        stop_loss  = round(support * 0.965, 2)           # 3.5% below support
+        return {"buy_price": buy_price, "sell_price": None, "target": target, "stop_loss": stop_loss}
+    else:
+        # SELL setup
+        sell_price = round((resistance or close * 1.02), 2)
+        target     = round(close * 0.93, 2)              # 7% downside target
+        stop_loss  = round((resistance or close) * 1.03, 2)  # 3% above resistance
+        return {"buy_price": None, "sell_price": sell_price, "target": target, "stop_loss": stop_loss}
+
+
+def _classify_signal(rsi, macd, macd_sig, close, sma20, recent_high=None, recent_low=None) -> list[dict]:
+    """Return list of signals for a stock, including price levels. May have 0-3 signals."""
     signals = []
 
     if rsi is not None:
         if rsi < 30:
             strength = "STRONG" if rsi < 20 else "MODERATE"
+            levels = _compute_levels("RSI_OVERSOLD", close, sma20, recent_high, recent_low)
             signals.append({
                 "signal_type": "RSI_OVERSOLD",
                 "strength":    strength,
                 "description": f"RSI({rsi:.1f}) below 30 — stock is oversold, potential bounce",
+                **levels,
             })
         elif rsi > 70:
             strength = "STRONG" if rsi > 80 else "MODERATE"
+            levels = _compute_levels("RSI_OVERBOUGHT", close, sma20, recent_high, recent_low)
             signals.append({
                 "signal_type": "RSI_OVERBOUGHT",
                 "strength":    strength,
                 "description": f"RSI({rsi:.1f}) above 70 — stock is overbought, potential pullback",
+                **levels,
             })
 
     if macd is not None and macd_sig is not None:
         if macd > macd_sig and macd > 0:
+            levels = _compute_levels("MACD_BULL", close, sma20, recent_high, recent_low)
             signals.append({
                 "signal_type": "MACD_BULL",
                 "strength":    "STRONG" if macd - macd_sig > abs(macd_sig) * 0.1 else "MODERATE",
                 "description": f"MACD({macd:.3f}) > Signal({macd_sig:.3f}) — bullish momentum",
+                **levels,
             })
         elif macd < macd_sig and macd < 0:
+            levels = _compute_levels("MACD_BEAR", close, sma20, recent_high, recent_low)
             signals.append({
                 "signal_type": "MACD_BEAR",
                 "strength":    "STRONG" if macd_sig - macd > abs(macd_sig) * 0.1 else "MODERATE",
                 "description": f"MACD({macd:.3f}) < Signal({macd_sig:.3f}) — bearish momentum",
+                **levels,
             })
 
     if sma20 is not None and close is not None:
         pct_above = (close - sma20) / sma20 * 100
         if pct_above > 2:
+            levels = _compute_levels("SMA_BULL", close, sma20, recent_high, recent_low)
             signals.append({
                 "signal_type": "SMA_BULL",
                 "strength":    "STRONG" if pct_above > 5 else "WEAK",
                 "description": f"Price {pct_above:.1f}% above SMA20 — uptrend confirmed",
+                **levels,
             })
         elif pct_above < -2:
+            levels = _compute_levels("SMA_BEAR", close, sma20, recent_high, recent_low)
             signals.append({
                 "signal_type": "SMA_BEAR",
                 "strength":    "STRONG" if pct_above < -5 else "WEAK",
                 "description": f"Price {abs(pct_above):.1f}% below SMA20 — downtrend pressure",
+                **levels,
             })
 
     return signals
@@ -182,14 +222,16 @@ async def get_all_signals(
 
             # Get last 60 bars for this symbol
             bars = await conn.fetch(
-                "SELECT close, prev_close FROM ohlcv_daily "
+                "SELECT close, prev_close, high, low FROM ohlcv_daily "
                 "WHERE symbol = $1 ORDER BY trade_date DESC LIMIT 60",
                 sym,
             )
             if len(bars) < 15:
                 continue
 
-            closes = [float(r["close"]) for r in reversed(bars)]
+            closes      = [float(r["close"]) for r in reversed(bars)]
+            recent_high = max(float(r["high"]) for r in bars[:20] if r["high"])
+            recent_low  = min(float(r["low"])  for r in bars[:20] if r["low"])
             last_bar = bars[0]
             close = float(last_bar["close"])
             prev  = float(last_bar["prev_close"]) if last_bar["prev_close"] else close
@@ -199,7 +241,7 @@ async def get_all_signals(
             macd, macd_s = _compute_macd(closes)
             sma20        = round(sum(closes[-20:]) / 20, 2) if len(closes) >= 20 else None
 
-            sigs = _classify_signal(rsi, macd, macd_s, close, sma20)
+            sigs = _classify_signal(rsi, macd, macd_s, close, sma20, recent_high, recent_low)
 
             for s in sigs:
                 if signal_type and s["signal_type"] != signal_type:
@@ -220,6 +262,10 @@ async def get_all_signals(
                     "sma20":       sma20,
                     "change_pct":  chg_pct,
                     "trade_date":  str(latest_dt),
+                    "buy_price":   s.get("buy_price"),
+                    "sell_price":  s.get("sell_price"),
+                    "target":      s.get("target"),
+                    "stop_loss":   s.get("stop_loss"),
                     "disclaimer":  "Technical indicator only — not financial advice",
                 })
 
@@ -241,12 +287,12 @@ async def get_all_signals(
 
 @router.get("/{symbol}", response_model=dict)
 async def get_symbol_signals(symbol: str) -> dict:
-    """Get all technical signals for a specific symbol."""
+    """Get all technical signals for a specific symbol, including buy/sell price levels."""
     conn = await asyncpg.connect(DB_DSN)
     try:
         sym = symbol.upper().strip()
         bars = await conn.fetch(
-            "SELECT close, prev_close, trade_date FROM ohlcv_daily "
+            "SELECT close, prev_close, high, low, trade_date FROM ohlcv_daily "
             "WHERE symbol = $1 ORDER BY trade_date DESC LIMIT 60",
             sym,
         )
@@ -262,7 +308,9 @@ async def get_symbol_signals(symbol: str) -> dict:
             sec_row = await conn.fetchrow("SELECT name FROM sectors WHERE id = $1", meta["sector_id"])
             sec_name = sec_row["name"] if sec_row else None
 
-        closes = [float(r["close"]) for r in reversed(bars)]
+        closes      = [float(r["close"]) for r in reversed(bars)]
+        recent_high = max(float(r["high"]) for r in bars[:20] if r["high"])
+        recent_low  = min(float(r["low"])  for r in bars[:20] if r["low"])
         last = bars[0]
         close = float(last["close"])
         prev  = float(last["prev_close"]) if last["prev_close"] else close
@@ -274,7 +322,7 @@ async def get_symbol_signals(symbol: str) -> dict:
         ema12_list   = _compute_ema(closes, 12)
         ema12        = round(ema12_list[-1], 2) if ema12_list else None
 
-        sigs = _classify_signal(rsi, macd, macd_s, close, sma20)
+        sigs = _classify_signal(rsi, macd, macd_s, close, sma20, recent_high, recent_low)
 
         return {
             "symbol":     sym,

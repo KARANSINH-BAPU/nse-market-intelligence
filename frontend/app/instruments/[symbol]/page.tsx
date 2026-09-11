@@ -1,20 +1,25 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import {
   TrendingUp, TrendingDown, ArrowLeft, RefreshCw,
-  BarChart2, Activity, ExternalLink, Clock,
+  BarChart2, Activity, Zap, Clock,
 } from "lucide-react";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-// Lazy-load recharts chart
 const TechnicalChart = dynamic(
   () => import("@/components/charts/TechnicalChart"),
-  { ssr: false, loading: () => <div style={{ height: 400, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-tertiary)" }}>Loading chart…</div> }
+  {
+    ssr: false,
+    loading: () => (
+      <div style={{ height: 400, display: "flex", alignItems: "center",
+        justifyContent: "center", color: "var(--text-tertiary)" }}>Loading chart…</div>
+    ),
+  }
 );
 
 function fmt(n: number | null | undefined, d = 2) {
@@ -41,7 +46,11 @@ interface Bar {
 }
 interface OhlcvData {
   symbol: string; period: string; count: number; bars: Bar[];
-  close: number; change_pct: number; rsi: number|null; macd: number|null; sma20: number|null;
+}
+interface Quote {
+  symbol: string; ltp: number | null; open: number | null; high: number | null;
+  low: number | null; prev_close: number | null; change: number | null;
+  change_pct: number | null; volume: number | null; source: string; is_live: boolean;
 }
 
 const PERIODS = [
@@ -51,61 +60,82 @@ const PERIODS = [
   { key: "1y", label: "1Y" },
 ];
 
+const LIVE_REFRESH_MS = 15000; // 15 seconds
+
 export default function InstrumentDetailPage() {
   const { symbol } = useParams() as { symbol: string };
   const SYM = symbol?.toUpperCase();
 
-  const [data,    setData]    = useState<OhlcvData | null>(null);
-  const [quote,   setQuote]   = useState<any>(null);
-  const [period,  setPeriod]  = useState("1y");
-  const [loading, setLoading] = useState(false);
-  const [lastAt,  setLastAt]  = useState<Date | null>(null);
-  const [tab,     setTab]     = useState<"chart"|"table">("chart");
+  const [data,     setData]     = useState<OhlcvData | null>(null);
+  const [quote,    setQuote]    = useState<Quote | null>(null);
+  const [period,   setPeriod]   = useState("1y");
+  const [loading,  setLoading]  = useState(false);
+  const [liveErr,  setLiveErr]  = useState(false);
+  const [lastAt,   setLastAt]   = useState<Date | null>(null);
+  const [tab,      setTab]      = useState<"chart" | "table">("chart");
+  const [countdown, setCountdown] = useState(LIVE_REFRESH_MS / 1000);
+  const countRef = useRef(countdown);
+  countRef.current = countdown;
 
+  // ── Fetch live quote ───────────────────────────────────────────────────────
+  const fetchQuote = useCallback(async () => {
+    if (!SYM) return;
+    try {
+      const r = await fetch(`${API}/api/v1/market/quote/${SYM}`,
+        { signal: AbortSignal.timeout(12000) });
+      if (r.ok) {
+        setQuote(await r.json());
+        setLiveErr(false);
+      } else {
+        setLiveErr(true);
+      }
+    } catch {
+      setLiveErr(true);
+    }
+    setLastAt(new Date());
+    setCountdown(LIVE_REFRESH_MS / 1000);
+  }, [SYM]);
+
+  // ── Full refresh (OHLCV + quote) ──────────────────────────────────────────
   const refresh = useCallback(async () => {
     if (!SYM) return;
     setLoading(true);
     try {
-      // Fetch OHLCV history AND live quote in parallel
-      const [ohlcvRes, quoteRes] = await Promise.allSettled([
+      const [ohlcvRes] = await Promise.allSettled([
         fetch(`${API}/api/v1/ohlcv/${SYM}?period=${period}`).then(r => r.ok ? r.json() : null),
-        // Use /quote/{symbol} which calls yfinance for live intraday price
-        fetch(`${API}/api/v1/market/quote/${SYM}`).then(r => r.ok ? r.json() : null),
       ]);
       if (ohlcvRes.status === "fulfilled" && ohlcvRes.value) setData(ohlcvRes.value);
-      if (quoteRes.status === "fulfilled" && quoteRes.value) {
-        setQuote(quoteRes.value);  // { symbol, ltp, change, change_pct, source }
-      }
-      setLastAt(new Date());
     } finally { setLoading(false); }
-  }, [SYM, period]);
+    await fetchQuote();
+  }, [SYM, period, fetchQuote]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // Live price refresh every 15s during market hours (9:15–15:30 IST)
+  // ── Live price auto-refresh every 15s ─────────────────────────────────────
   useEffect(() => {
-    const id = setInterval(async () => {
-      if (!SYM) return;
-      try {
-        const r = await fetch(`${API}/api/v1/market/quote/${SYM}`);
-        if (r.ok) {
-          const d = await r.json();
-          setQuote(d);
-        }
-      } catch {}
-    }, 15000);   // every 15 seconds
+    const id = setInterval(fetchQuote, LIVE_REFRESH_MS);
     return () => clearInterval(id);
-  }, [SYM]);
+  }, [fetchQuote]);
 
-  const latest  = data?.bars[data.bars.length - 1];
-  // quote.ltp = live intraday price from yfinance; fallback to DB close
-  const ltp     = quote?.ltp ?? latest?.close;
-  const change  = quote?.change_pct ?? latest?.change_pct;
-  const up      = (change ?? 0) >= 0;
-  const isLive  = !!quote?.ltp;  // true if we have intraday data from yfinance
+  // ── Countdown timer display ────────────────────────────────────────────────
+  useEffect(() => {
+    const id = setInterval(() => {
+      setCountdown(c => (c <= 1 ? LIVE_REFRESH_MS / 1000 : c - 1));
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
 
-  // For TechnicalChart — MUST match FeatureRow interface exactly:
-  // date, close, open, high, low, volume, rsi_14, macd_line, macd_signal, macd_hist, sma_20, ema_12
+  const latest    = data?.bars[data.bars.length - 1];
+  const ltp       = quote?.ltp ?? latest?.close ?? null;
+  const change    = quote?.change_pct ?? latest?.change_pct ?? null;
+  const up        = (change ?? 0) >= 0;
+  const isLive    = !!quote?.is_live;
+  const prevClose = quote?.prev_close ?? null;
+  const dayHigh   = quote?.high ?? latest?.high ?? null;
+  const dayLow    = quote?.low ?? latest?.low ?? null;
+  const open      = quote?.open ?? latest?.open ?? null;
+  const volume    = quote?.volume ?? latest?.volume ?? null;
+
   const chartFeatures = (data?.bars ?? []).map(b => ({
     date:        b.trade_date,
     close:       b.close,
@@ -144,32 +174,59 @@ export default function InstrumentDetailPage() {
               <h1 style={{ fontSize: "1.5rem", fontWeight: 800,
                 fontFamily: "var(--font-mono)", margin: 0 }}>{SYM}</h1>
               <span className="data-source live">NSE · EQ</span>
-              {/* LIVE = intraday from yfinance, EOD = last close from DB */}
-              <span style={{ padding: "2px 7px", borderRadius: 4, fontSize: "0.643rem",
+
+              {/* LIVE / EOD badge */}
+              <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: "0.643rem",
                 fontWeight: 800, letterSpacing: "0.06em",
                 background: isLive ? "rgba(34,211,165,0.15)" : "rgba(245,158,11,0.15)",
                 color: isLive ? "#22d3a5" : "#f59e0b",
-                border: `1px solid ${isLive ? "rgba(34,211,165,0.3)" : "rgba(245,158,11,0.3)"}` }}>
-                {isLive ? "🟢 LIVE" : "🟡 EOD"}
+                border: `1px solid ${isLive ? "rgba(34,211,165,0.3)" : "rgba(245,158,11,0.3)"}`,
+                display: "flex", alignItems: "center", gap: 4 }}>
+                {isLive ? (
+                  <><span style={{ width: 6, height: 6, borderRadius: "50%", background: "#22d3a5",
+                    animation: "pulse 1.5s ease-in-out infinite" }} />🟢 LIVE</>
+                ) : "🟡 EOD"}
               </span>
-              <span className="data-source">{quote?.source ?? "ohlcv_daily"}</span>
+
+              {/* Error indicator */}
+              {liveErr && (
+                <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: "0.643rem",
+                  fontWeight: 700, background: "rgba(239,68,68,0.1)",
+                  color: "#ef4444", border: "1px solid rgba(239,68,68,0.3)" }}>
+                  ⚠ Live fetch failed — showing cached
+                </span>
+              )}
+
+              <span style={{ fontSize: "0.643rem", color: "var(--text-tertiary)",
+                padding: "2px 6px", background: "var(--surface-03)", borderRadius: 3 }}>
+                {quote?.source ?? "ohlcv_daily"}
+              </span>
             </div>
+
             <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-              <span style={{ fontSize: "2.2rem", fontWeight: 700,
+              <span style={{ fontSize: "2.4rem", fontWeight: 700,
                 fontFamily: "var(--font-mono)", lineHeight: 1,
-                color: up ? "var(--color-up)" : "var(--color-down)" }}>
+                color: ltp ? (up ? "var(--color-up)" : "var(--color-down)") : "var(--text-tertiary)" }}>
                 {ltp ? `₹${fmt(ltp)}` : "—"}
               </span>
               {change != null && (
                 <span style={{ fontSize: "1rem", fontFamily: "var(--font-mono)",
-                  color: up ? "var(--color-up)" : "var(--color-down)" }}>
-                  {up ? <TrendingUp size={14} style={{ display: "inline", marginRight: 4 }} />
-                       : <TrendingDown size={14} style={{ display: "inline", marginRight: 4 }} />}
+                  color: up ? "var(--color-up)" : "var(--color-down)",
+                  display: "flex", alignItems: "center", gap: 4 }}>
+                  {up ? <TrendingUp size={14}/> : <TrendingDown size={14}/>}
                   {fmtPct(change)}
+                </span>
+              )}
+              {quote?.change != null && (
+                <span style={{ fontSize: "0.857rem", fontFamily: "var(--font-mono)",
+                  color: "var(--text-secondary)" }}>
+                  ({quote.change >= 0 ? "+" : ""}{fmt(quote.change)})
                 </span>
               )}
             </div>
           </div>
+
+          {/* Refresh controls */}
           <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
             <button onClick={refresh} disabled={loading}
               style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--surface-03)",
@@ -177,9 +234,16 @@ export default function InstrumentDetailPage() {
                 borderRadius: "var(--border-radius)", padding: "6px 12px",
                 cursor: "pointer", fontSize: "0.786rem" }}>
               <RefreshCw size={12} style={{ animation: loading ? "spin 1s linear infinite" : "none" }} />
-              {lastAt ? lastAt.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "Refresh"}
+              Refresh
             </button>
-            {lastAt && <span style={{ fontSize: "0.643rem", color: "var(--text-tertiary)" }}>Auto-refresh · real-time data</span>}
+            {lastAt && (
+              <span style={{ fontSize: "0.643rem", color: "var(--text-tertiary)",
+                display: "flex", alignItems: "center", gap: 4 }}>
+                <Clock size={9} />
+                {lastAt.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                &nbsp;· next in {countdown}s
+              </span>
+            )}
           </div>
         </div>
 
@@ -187,11 +251,11 @@ export default function InstrumentDetailPage() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px,1fr))",
           gap: 10, marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
           {[
-            { label: "Prev Close", value: latest?.close != null ? `₹${fmt(latest.close)}` : (quote?.prev_close ? `₹${fmt(quote.prev_close)}` : "—") },
-            { label: "Open",       value: latest ? `₹${fmt(latest.open)}` : "—" },
-            { label: "Day High",   value: latest ? `₹${fmt(latest.high)}` : "—" },
-            { label: "Day Low",    value: latest ? `₹${fmt(latest.low)}` : "—" },
-            { label: "Volume",     value: latest ? fmtVol(latest.volume) : "—" },
+            { label: "Prev Close", value: prevClose ? `₹${fmt(prevClose)}` : "—" },
+            { label: "Open",       value: open  ? `₹${fmt(open)}` : "—" },
+            { label: "Day High",   value: dayHigh ? `₹${fmt(dayHigh)}` : "—" },
+            { label: "Day Low",    value: dayLow  ? `₹${fmt(dayLow)}` : "—" },
+            { label: "Volume",     value: fmtVol(volume) },
             { label: "RSI(14)",    value: latest?.rsi != null ? latest.rsi.toFixed(1) : "—" },
             { label: "MACD",       value: latest?.macd != null ? latest.macd.toFixed(3) : "—" },
             { label: "SMA20",      value: latest?.sma20 != null ? `₹${fmt(latest.sma20)}` : "—" },
@@ -208,7 +272,7 @@ export default function InstrumentDetailPage() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
         marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
         <div style={{ display: "flex", gap: 6 }}>
-          {(["chart","table"] as const).map(t => (
+          {(["chart", "table"] as const).map(t => (
             <button key={t} onClick={() => setTab(t)}
               style={{ padding: "5px 14px", borderRadius: "var(--border-radius)", fontWeight: 600,
                 border: "none", cursor: "pointer", fontSize: "0.786rem",
@@ -249,6 +313,7 @@ export default function InstrumentDetailPage() {
           {loading && !chartFeatures.length ? (
             <div style={{ height: 300, display: "flex", alignItems: "center",
               justifyContent: "center", color: "var(--text-tertiary)" }}>
+              <RefreshCw size={20} style={{ animation: "spin 1s linear infinite", marginRight: 8 }} />
               Loading OHLCV data for {SYM}…
             </div>
           ) : chartFeatures.length ? (
@@ -334,7 +399,10 @@ export default function InstrumentDetailPage() {
         </div>
       )}
 
-      <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
+      <style>{`
+        @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+      `}</style>
     </div>
   );
 }

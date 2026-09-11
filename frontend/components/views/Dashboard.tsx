@@ -36,8 +36,9 @@ function fmtVol(n: number) {
 }
 
 interface Mover {
-  symbol: string; name: string; sector: string | null;
-  close: number; change: number; change_pct: number; volume: number;
+  symbol: string; name?: string; sector?: string | null;
+  close?: number; ltp?: number; change: number; change_pct: number; volume: number;
+  open?: number | null; high?: number | null; low?: number | null; prev_close?: number | null;
 }
 interface Breadth {
   advances: number; declines: number; unchanged: number;
@@ -104,6 +105,7 @@ function SectionHeader({ icon, title, subtitle, href }: {
 
 // ── Mover Row ──────────────────────────────────────────────────────────────
 function MoverRow({ m, up }: { m: Mover; up: boolean }) {
+  const price = m.ltp ?? m.close ?? 0;
   return (
     <div style={{
       display: "flex", justifyContent: "space-between", alignItems: "center",
@@ -116,12 +118,12 @@ function MoverRow({ m, up }: { m: Mover; up: boolean }) {
         </Link>
         <div style={{ fontSize: "0.714rem", color: "var(--text-tertiary)",
           whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 140 }}>
-          {m.sector || m.name}
+          {m.sector || m.name || m.symbol}
         </div>
       </div>
       <div style={{ textAlign: "right" }}>
         <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.857rem" }}>
-          ₹{fmt(m.close)}
+          ₹{fmt(price)}
         </div>
         <div style={{
           fontFamily: "var(--font-mono)", fontSize: "0.786rem", fontWeight: 700,
@@ -156,25 +158,28 @@ export function Dashboard() {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [moversRes, breadthRes, sectorRes, sigRes, snapRes] = await Promise.allSettled([
-        fetch(`${API}/api/v1/market/movers?limit=10`).then(r => r.json()),
+      const [glRes, breadthRes, sectorRes, sigRes, snapRes] = await Promise.allSettled([
+        // Use gainers-losers for NSE-accurate Nifty 50 data
+        fetch(`${API}/api/v1/market/gainers-losers?index=NIFTY50&limit=10`).then(r => r.json()),
         fetch(`${API}/api/v1/market/breadth`).then(r => r.json()),
         fetch(`${API}/api/v1/market/sector-performance`).then(r => r.json()),
         fetch(`${API}/api/v1/signals?limit=20&strength=STRONG`).then(r => r.json()),
         fetch(`${API}/api/v1/market/snapshot`).then(r => r.json()),
       ]);
 
-      if (moversRes.status === "fulfilled") {
-        setGainers(moversRes.value.gainers || []);
-        setLosers(moversRes.value.losers   || []);
-        setTradeDate(moversRes.value.trade_date || "");
+      if (glRes.status === "fulfilled") {
+        setGainers(glRes.value.gainers || []);
+        setLosers(glRes.value.losers   || []);
+        // Show today's date if live, else DB session date
+        const glDate = glRes.value.as_of || "";
+        setTradeDate(glDate);
       }
       if (breadthRes.status === "fulfilled") setBreadth(breadthRes.value);
       if (sectorRes.status === "fulfilled")  setSectors(sectorRes.value || []);
       if (sigRes.status === "fulfilled")     setSignals(sigRes.value.signals || []);
       if (snapRes.status === "fulfilled" && snapRes.value.indices) {
-        const mapped: Record<string,any> = {};
-        for (const [k, v] of Object.entries(snapRes.value.indices as Record<string,any>)) {
+        const mapped: Record<string, any> = {};
+        for (const [k, v] of Object.entries(snapRes.value.indices as Record<string, any>)) {
           const key = KEY_MAP[k] ?? k;
           mapped[key] = v;
         }
@@ -200,7 +205,11 @@ export function Dashboard() {
         <div>
           <h1 style={{ fontSize: "1.4rem", fontWeight: 700, marginBottom: 2 }}>Dashboard</h1>
           <p style={{ fontSize: "0.786rem", color: "var(--text-tertiary)" }}>
-            {tradeDate ? `Session: ${new Date(tradeDate).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" })}` : ""}
+            {tradeDate
+              ? `NIFTY 50 · ${new Date(tradeDate + "T00:00:00").toLocaleDateString("en-IN", {
+                  weekday: "short", day: "numeric", month: "short", year: "numeric"
+                })}`
+              : `Today · ${new Date().toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" })}`}
             {lastAt ? ` · Updated ${lastAt.toLocaleTimeString("en-IN")}` : ""}
           </p>
         </div>
