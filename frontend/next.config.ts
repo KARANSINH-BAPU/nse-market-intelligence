@@ -2,8 +2,6 @@
 const nextConfig = {
   // Skip TypeScript type-check errors during build (runtime still works)
   typescript: { ignoreBuildErrors: true },
-  // Skip ESLint errors during build
-  eslint: { ignoreDuringBuilds: true },
   // Rewrites: proxy API calls to FastAPI backend
   async rewrites() {
     return [
