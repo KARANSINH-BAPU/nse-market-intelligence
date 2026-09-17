@@ -189,21 +189,27 @@ const ACTION_STYLE: Record<string, { bg: string; color: string; border: string }
 export default function PredictionsPage() {
   const [raw,      setRaw]      = useState<RawSignal[]>([]);
   const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState<string|null>(null);
   const [view,     setView]     = useState<"all" | "buy" | "sell">("all");
-  const [minConf,  setMinConf]  = useState(0);       // minimum confidence filter
+  const [minConf,  setMinConf]  = useState(0);       // default: show ALL
   const [tradeDate, setDate]    = useState("");
   const [scanned,  setScanned]  = useState(0);
 
   const scan = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
-      const r = await fetch(`${API}/api/v1/signals?limit=2000`);
-      if (r.ok) {
-        const d = await r.json();
-        setRaw(d.signals ?? []);
-        setDate(d.trade_date ?? "");
-        setScanned(d.scanned ?? 0);
+      const r = await fetch(`${API}/api/v1/signals?limit=10000`);
+      if (!r.ok) {
+        const txt = await r.text();
+        throw new Error(`API error ${r.status}: ${txt.slice(0,200)}`);
       }
+      const d = await r.json();
+      setRaw(d.signals ?? []);
+      setDate(d.trade_date ?? "");
+      setScanned(d.scanned ?? 0);
+    } catch(e: any) {
+      setError(e.message ?? "Failed to load signals");
     } finally { setLoading(false); }
   }, []);
 
@@ -295,6 +301,19 @@ export default function PredictionsPage() {
           </button>
         ))}
       </div>
+
+      {/* Error banner */}
+      {error && (
+        <div style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.35)",
+          borderRadius: "var(--border-radius)", padding: "10px 14px", marginBottom: 14,
+          display: "flex", gap: 8, fontSize: "0.786rem", color: "#f87171", alignItems: "center" }}>
+          <AlertTriangle size={14} style={{ flexShrink: 0 }} />
+          <span><strong>Error loading predictions:</strong> {error}</span>
+          <button onClick={scan} style={{ marginLeft: "auto", padding: "3px 10px",
+            borderRadius: 4, border: "1px solid #f87171", background: "transparent",
+            color: "#f87171", cursor: "pointer", fontSize: "0.714rem" }}>Retry</button>
+        </div>
+      )}
 
       {/* Disclaimer */}
       <div style={{ background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.25)",

@@ -187,7 +187,7 @@ async def get_all_signals(
     signal_type: str | None = Query(None, description="Filter: RSI_OVERSOLD|RSI_OVERBOUGHT|MACD_BULL|MACD_BEAR"),
     sector:      str | None = Query(None),
     strength:    str | None = Query(None, description="STRONG|MODERATE|WEAK"),
-    limit:       int        = Query(100, ge=1, le=500),
+    limit:       int        = Query(5000, ge=1, le=10000),
 ) -> dict:
     """
     Scan all stocks and return technical signals.
