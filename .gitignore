@@ -149,3 +149,5 @@ redisdata/
 tmp/
 temp/
 scratch/
+
+.github/workflows/
