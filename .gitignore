@@ -28,7 +28,7 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+# Python venv lib dirs only (not frontend/lib)\nbackend/lib/\nbackend/lib64/
 lib64/
 parts/
 sdist/
