@@ -7,7 +7,7 @@
 
 ---
 
-## 🚀 Features
+## 🚀Features
 
 | Feature | Description |
 |---------|-------------|
